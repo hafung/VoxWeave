@@ -1,0 +1,370 @@
+/*
+ * qwen_tts_kernels.h - Kernel function declarations
+ */
+
+#ifndef QWEN_TTS_KERNELS_H
+#define QWEN_TTS_KERNELS_H
+
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* ========================================================================
+ * Cache-line aligned allocation (64B for Apple M1/M2/x86-64)
+ * Cross-platform: uses POSIX posix_memalign on all targets.
+ * All BLAS/SIMD buffers MUST use these to avoid cache-line splits.
+ * ======================================================================== */
+
+static inline void *aligned_malloc(size_t size) {
+#ifdef _WIN32
+    /* The UCRT heap is 16-byte aligned on x64 and every AVX2 kernel in this
+     * project uses unaligned loads/stores. Keeping malloc/free ownership also
+     * avoids mixing the UCRT and _aligned_malloc allocation families. */
+    return malloc(size);
+#else
+    void *ptr = NULL;
+    if (posix_memalign(&ptr, 64, size) != 0) return NULL;
+    return ptr;
+#endif
+}
+static inline void *aligned_calloc(size_t count, size_t size) {
+    size_t total = count * size;
+    void *ptr = aligned_malloc(total);
+    if (ptr) memset(ptr, 0, total);
+    return ptr;
+}
+
+/* ========================================================================
+ * Threading
+ * ======================================================================== */
+
+void qwen_set_threads(int n);
+
+/* Retarget the BLAS thread pool at a phase boundary. Prefill is BLAS-heavy and
+ * runs with no decoder thread beside it, so it wants every thread; generation
+ * runs concurrently with the decoder (which is the BLAS user there), so BLAS
+ * must step back or the two pools fight for the same cores. No-op unless linked
+ * against OpenBLAS, and always a no-op if the user set OPENBLAS_NUM_THREADS. */
+void qwen_blas_set_threads(int n);
+int qwen_get_threads(void);
+int qwen_get_num_cpus(void);
+void qwen_init_threads(void);
+
+/* Enable flush-to-zero / denormals-are-zero on the CURRENT thread (FPCR on ARM,
+ * MXCSR on x86). Per-thread state, so every compute thread — including pool
+ * workers — must call it. Cheap (~1-2 cycles); inaudible quality impact. */
+void qwen_ftz_on(void);
+
+/* Abort with a clear message if this binary was compiled for an ISA the running
+ * CPU does not support (x86: -mavx2 build on a CPU without AVX2). No-op on ARM
+ * and on portable builds. Call once at startup before any SIMD kernel runs. */
+void qwen_check_runtime_isa(void);
+
+/* Print the ACTUAL compiled SIMD/threading capabilities of this binary to `out`
+ * (derived from the same #ifdef guards the kernels use). Makes the real state
+ * visible + testable so a "we thought AVX existed" gap can't hide behind docs.
+ * `out` may be NULL -> stderr. */
+void qwen_caps_report(void *out);
+
+/* Kernel numeric self-test: runs the dispatched matvecs (bf16/int8/argmax-int8)
+ * against an f32 reference on deterministic random data. Cross-ISA correctness
+ * proof for the SIMD kernels (esp. the AVX-512/VNNI paths) that does NOT depend
+ * on a full-pipeline golden, so it's immune to the greedy trajectory fork.
+ * `out` may be NULL -> stdout. Returns 0 on PASS, >0 = number of failed cases. */
+int qwen_kernel_selftest(void *out);
+
+/* Batched matmat throughput microbench: times the real qwen_matmat_{bf16,int8,q4_0}
+ * vs B*qwen_matvec_* per precision/shape at the current thread count (no model).
+ * B via QWEN_BATCH_B (default 8). `out` may be NULL -> stdout. Returns 0. */
+int qwen_matmat_bench(void *out);
+
+/* ========================================================================
+ * Norm functions
+ * ======================================================================== */
+
+/* RMSNorm: out = x / sqrt(mean(x^2) + eps) * weight */
+void qwen_rms_norm(float *out, const float *x, const float *weight,
+                   int seq, int dim, float eps);
+
+/* Fused residual-add + RMSNorm: x[i] += residual[i], then out = RMSNorm(x, weight).
+ * Saves one full pass over x compared to separate add + norm.
+ * x is modified in-place (residual added), then normalized into out. */
+void qwen_rms_norm_residual(float *out, float *x, const float *residual,
+                            const float *weight, int dim, float eps);
+
+/* RMSNorm per-head */
+void qwen_rms_norm_per_head(float *x, const float *weight,
+                            int seq, int n_heads, int head_dim, float eps);
+
+/* ========================================================================
+ * Linear / MatVec
+ * ======================================================================== */
+
+/* bf16 matvec: y[rows] = W[rows,cols] @ x[cols]  (W is bf16, x/y are f32)
+ * NEON-optimized + multi-threaded via dispatch_apply on macOS. */
+void qwen_matvec_bf16(float *y, const uint16_t *W, const float *x, int rows, int cols);
+
+/* Optional GPU offload hook for qwen_matvec_bf16 (and the bf16 QKV fused path).
+ * NULL = CPU default. Installed by the Metal/CUDA backend when --backend is set. */
+extern void (*g_qwen_matvec_bf16_hook)(float *, const uint16_t *, const float *, int, int);
+/* Optional GPU offload hook for the batched matmat (where the MMA win lands). */
+extern void (*g_qwen_matmat_bf16_hook)(float *, const uint16_t *, const float *, int, int, int);
+
+/* bf16 BATCHED matmat (the batching/spec-decode-verify primitive):
+ *   Y[rows,B] = W[rows,cols] @ X[cols,B]     (W bf16; X,Y f32, row-major)
+ * Each weight element is read from DRAM ONCE and reused across all B columns
+ * (amortizes the per-token weight re-read that bounds single-stream). B<=64.
+ * Threaded by row-slice, matching qwen_matvec_bf16. With B==1 it equals matvec. */
+void qwen_matmat_bf16(float *Y, const uint16_t *W, const float *X, int rows, int cols, int B);
+
+/* INT8 batched matmat twin (Y[rows,B] = (W_int8*scale) @ X[cols,B]). Low precision
+ * is where batching pays MOST: int8 halves the weight read. Same compile-time-B
+ * register-blocking as bf16. X is f32 [cols,B]; weights are the existing int8
+ * per-row-scale format. B<=64. (q4_0 twin declared after the q4_0_block_t typedef.) */
+void qwen_matmat_int8(float *Y, const int8_t *W, const float *scale,
+                      const float *X, int rows, int cols, int B);
+
+/* Unified QKV matvec: single dispatch for Q, K, V (avoids 3 barriers) */
+void qwen_matvec_bf16_qkv(float *q, float *k, float *v,
+                           const uint16_t *Wq, const uint16_t *Wk, const uint16_t *Wv,
+                           const float *x, int in_dim, int q_dim, int kv_dim);
+
+/* Matrix-vector: y = W @ x (W is bf16) - batched over seq */
+void qwen_linear_nobias_bf16(float *y, const float *x,
+                             const uint16_t *W, int seq, int in_dim, int out_dim);
+
+/* Generic linear */
+void qwen_linear(float *y, const float *x, const float *W, const float *bias,
+                 int seq, int in_dim, int out_dim);
+
+/* INT8 matvec: y[rows] = (W_int8[rows,cols] * scale[rows]) @ x[cols]
+ * Per-row absmax dequantization. NEON-optimized + multi-threaded. */
+void qwen_matvec_int8(float *y, const int8_t *W, const float *scale,
+                      const float *x, int rows, int cols);
+
+/* Unified QKV matvec (INT8 variant) */
+void qwen_matvec_int8_qkv(float *q, float *k, float *v,
+                           const int8_t *Wq, const float *sq,
+                           const int8_t *Wk, const float *sk,
+                           const int8_t *Wv, const float *sv,
+                           const float *x, int in_dim, int q_dim, int kv_dim);
+
+/* INT8 fused argmax+matvec (returns argmax of W @ x without materializing logits) */
+int qwen_argmax_matvec_int8(const float *x, const int8_t *W, const float *scale,
+                            int in_dim, int out_dim);
+
+/* Quantize bf16 weight matrix to int8 with per-row absmax scaling */
+void qwen_quantize_bf16_to_int8(const uint16_t *src_bf16, int rows, int cols,
+                                 int8_t *dst_int8, float *dst_scale);
+
+/* fp16 (IEEE binary16) <-> f32 for the q4_0 block scale. Storage-only: all math
+ * stays f32 — one convert per 32-weight block on kernels that are bandwidth-bound,
+ * so the cost is noise while the block shrinks 20 -> 18 bytes (-10% q4 traffic;
+ * perf item 2, 2026-07-11 — same layout as llama.cpp q4_0). aarch64 uses the
+ * native __fp16; elsewhere a portable bit-exact fallback (handles subnormals). */
+static inline float qwen_f16_to_f32(uint16_t h) {
+#if defined(__aarch64__)
+    __fp16 v; memcpy(&v, &h, sizeof(v)); return (float)v;
+#else
+    uint32_t sign = (uint32_t)(h & 0x8000) << 16;
+    uint32_t em   = h & 0x7FFF;
+    uint32_t bits;
+    if (em >= 0x7C00)      bits = sign | 0x7F800000u | ((em & 0x03FF) << 13); /* inf/NaN */
+    else if (em >= 0x0400) bits = sign | ((em + ((127u - 15u) << 10)) << 13); /* normal */
+    else if (em == 0)      bits = sign;                                        /* +-0 */
+    else {                                                                     /* subnormal */
+        int shift = 0; uint32_t m = em;
+        while (!(m & 0x0400)) { m <<= 1; shift++; }
+        bits = sign | ((uint32_t)(127 - 15 - shift) << 23) | ((m & 0x03FF) << 13);
+    }
+    float f; memcpy(&f, &bits, sizeof(f)); return f;
+#endif
+}
+static inline uint16_t qwen_f32_to_f16(float f) {
+#if defined(__aarch64__)
+    __fp16 v = (__fp16)f; uint16_t h; memcpy(&h, &v, sizeof(h)); return h;
+#else
+    uint32_t bits; memcpy(&bits, &f, sizeof(bits));
+    uint32_t sign = (bits >> 16) & 0x8000;
+    int32_t  e    = (int32_t)((bits >> 23) & 0xFF) - 127 + 15;
+    uint32_t m    = bits & 0x007FFFFF;
+    if (e >= 0x1F) return (uint16_t)(sign | 0x7C00);       /* overflow -> inf */
+    if (e <= 0) {                                          /* subnormal / zero */
+        if (e < -10) return (uint16_t)sign;
+        m |= 0x00800000;
+        uint32_t shift = (uint32_t)(14 - e);
+        uint16_t sub = (uint16_t)(m >> shift);
+        if ((m >> (shift - 1)) & 1) sub++;                 /* round-to-nearest */
+        return (uint16_t)(sign | sub);
+    }
+    uint16_t out = (uint16_t)(sign | ((uint32_t)e << 10) | (m >> 13));
+    if (m & 0x1000) out++;                                 /* round-to-nearest (carry into exp is fine) */
+    return out;
+#endif
+}
+
+/* Q4_0 block: 32 weights packed into 18 bytes (16 nibble-pairs + fp16 scale).
+ * The fp16 scale (was f32, 20 B/block) cuts q4 weight traffic 10% — the block is
+ * pure bandwidth on the 16x-reread CP. Read with qwen_f16_to_f32(). */
+#define Q4_0_BLOCK_SIZE 32
+typedef struct {
+    uint16_t scale_f16;    /* per-block scale factor, IEEE fp16 bits */
+    uint8_t qs[16];        /* 32 nibbles: low 4 bits = even idx, high 4 bits = odd idx */
+} q4_0_block_t;            /* 18 bytes per 32 weights */
+
+/* Quantize bf16 weight matrix to Q4_0 blocks.
+ * cols must be a multiple of 32. Returns number of blocks per row = cols/32.
+ * dst must have rows * (cols/32) blocks pre-allocated. */
+void qwen_quantize_bf16_to_q4_0(const uint16_t *src_bf16, int rows, int cols,
+                                 q4_0_block_t *dst);
+
+/* Q4_0 matvec: y[rows] = dequant(W_q4[rows, cols/32 blocks]) @ x[cols]
+ * NEON-optimized + multi-threaded. */
+void qwen_matvec_q4_0(float *y, const q4_0_block_t *W, const float *x,
+                       int rows, int cols);
+
+/* Q4_0 batched matmat twin: Y[rows,B] = dequant(W_q4) @ X[cols,B]. The nibble
+ * unpack is done once and reused across the B columns (amortized) — where int4
+ * batching pays most. X is f32 [cols,B]. B<=64. */
+void qwen_matmat_q4_0(float *Y, const q4_0_block_t *W, const float *X,
+                      int rows, int cols, int B);
+
+/* Unified QKV matvec (Q4_0 variant) */
+void qwen_matvec_q4_0_qkv(float *q, float *k, float *v,
+                            const q4_0_block_t *Wq, const q4_0_block_t *Wk,
+                            const q4_0_block_t *Wv,
+                            const float *x, int in_dim, int q_dim, int kv_dim);
+
+/* Q2_0 block: 32 weights at 2 bits each (8 bytes) + fp32 scale = 12 bytes.
+ * 4 symmetric levels: dequant(code) = (code - 1.5) * scale, code in {0,1,2,3}
+ * -> {-1.5,-0.5,0.5,1.5}*scale, scale = absmax/1.5. EXPERIMENTAL hybrid lever:
+ * used on the quant-tolerant FFN matrices to shrink the CP working set below int4. */
+#define Q2_0_BLOCK_SIZE 32
+typedef struct {
+    float scale;           /* per-block scale factor */
+    uint8_t qs[8];         /* 32 codes × 2 bits, 4 codes per byte (idx i -> byte i/4, bits (i%4)*2) */
+} q2_0_block_t;            /* 12 bytes per 32 weights */
+
+void qwen_quantize_bf16_to_q2_0(const uint16_t *src_bf16, int rows, int cols,
+                                 q2_0_block_t *dst);
+void qwen_matvec_q2_0(float *y, const q2_0_block_t *W, const float *x,
+                       int rows, int cols);
+
+/* ========================================================================
+ * Attention
+ * ======================================================================== */
+
+/* Causal GQA attention (f32 KV cache) */
+void qwen_causal_attention(float *out, const float *Q, const float *K, const float *V,
+                           int seq_q, int seq_k, int n_heads, int n_kv_heads,
+                           int head_dim, float scale, int q_offset);
+
+/* Causal GQA attention with sliding window (f32 KV, window=0 means no window) */
+void qwen_causal_attention_windowed(float *out, const float *Q, const float *K, const float *V,
+                                     int seq_q, int seq_k, int n_heads, int n_kv_heads,
+                                     int head_dim, float scale, int q_offset, int window);
+
+/* Causal GQA attention with bf16 KV cache (K/V stored as uint16_t bf16) */
+void qwen_causal_attention_bf16kv(float *out, const float *Q,
+                                  const uint16_t *K_bf16, const uint16_t *V_bf16,
+                                  int seq_q, int seq_k, int n_heads, int n_kv_heads,
+                                  int head_dim, float scale, int q_offset);
+
+/* ========================================================================
+ * RoPE - INTERLEAVED STYLE
+ * ======================================================================== */
+
+/* Compute RoPE cos/sin cache for interleaved RoPE */
+void qwen_compute_rope_interleaved(float *cos_out, float *sin_out, const int *positions,
+                                   int seq, int head_dim, float theta);
+
+/* Apply interleaved RoPE to x[seq, n_heads * head_dim] */
+void qwen_apply_rope_interleaved(float *x, const float *cos_vals, const float *sin_vals,
+                                 int seq, int n_heads, int head_dim);
+
+/* ========================================================================
+ * Element-wise ops
+ * ======================================================================== */
+
+/* SiLU: x = x / (1 + exp(-x)) */
+void qwen_silu(float *x, int n);
+
+/* Fused SwiGLU: interleaved [g0,u0,g1,u1,...] → [silu(g0)*u0, silu(g1)*u1, ...]
+ * Uses vvexpf (Accelerate) on macOS for batch exp, scalar loop elsewhere.
+ * tmp must have space for n floats (used for batch exp). */
+void qwen_swiglu_inplace(float *gate_up, float *tmp, int n);
+
+/* Add: y += x */
+void qwen_add_inplace(float *y, const float *x, int n);
+
+/* Mul: y *= x */
+void qwen_mul_inplace(float *y, const float *x, int n);
+
+/* Scale: y *= s */
+void qwen_vec_scale_inplace(float *y, float s, int n);
+
+/* bf16 rounding */
+void qwen_round_bf16(float *x, int n);
+
+/* Accumulate bf16 vector into f32: dst[i] += bf16_to_f32(src[i])
+ * NEON/AVX optimized for batch BF16→F32 conversion + addition. */
+void qwen_bf16_accum_f32(float *dst, const uint16_t *src_bf16, int n);
+
+/* Convert bf16 vector to f32: dst[i] = bf16_to_f32(src[i])
+ * NEON/AVX2 vectorized. */
+void qwen_bf16_to_f32_vec(float *dst, const uint16_t *src_bf16, int n);
+
+/* Snake activation: x += (1/exp(beta)) * sin²(exp(alpha) * x)
+ * Applied per-channel to channel-first data [channels, length].
+ * log_alpha/log_beta are per-channel params in LOG SPACE. */
+void qwen_snake_activation(float *data, int channels, int length,
+                            const float *log_alpha, const float *log_beta);
+
+/* ========================================================================
+ * Argmax / Sampling
+ * ======================================================================== */
+
+int qwen_argmax_matvec_bf16(const float *x, const uint16_t *W_bf16, int in_dim, int out_dim);
+int qwen_argmax_matvec_q4_0(const float *x, const q4_0_block_t *W, int in_dim, int out_dim);
+
+#ifdef __cplusplus
+}
+#endif
+
+
+/* ========================================================================
+ * INT8 SDOT conv engine (speech decoder, opt-in via QWEN_SD_INT8=1)
+ * Ported from external PR #17 (TrinityTF). ARM dotprod only; fp32 elsewhere.
+ * ======================================================================== */
+
+/* 1 if the SDOT int8 conv path is compiled in (ARM dotprod). */
+int qwen_sd_int8_available(void);
+
+/* K padded up to a multiple of blk (blk must be a multiple of 16). */
+int qwen_int8_kp(int K, int blk);
+
+/* Per-row, per-blk-block absmax int8 quantization: scales is [rows][Kp/blk],
+ * rows padded to Kp with zeros. */
+void qwen_int8_quant_rows(int8_t *dst, float *scales, const float *src,
+                          int rows, int K, int Kp, int blk);
+
+/* Threaded int8 causal conv1d: im2col + SDOT GEMM per column panel.
+ * Wq: [out_ch, Kp] with block scales sw [out_ch][Kp/blk] (K = in_ch*kernel,
+ * im2col order ic*kernel+kk). out: channel-first [out_ch, length], bias applied. */
+void qwen_conv1d_int8(float *out, const float *in,
+                      const int8_t *Wq, const float *sw, const float *bias,
+                      int in_ch, int out_ch, int length, int kernel, int dilation,
+                      int Kp, int blk);
+
+/* Threaded int8 GEMM on pre-quantized activations: out[M,N] (ld out_ld) =
+ * sum_b sw[m][b]*sa[t][b]*dot_b(Wq[m], Xq[t]); no bias. Rows Kp-strided. */
+void qwen_gemm_int8(float *out, int out_ld,
+                    const int8_t *Wq, const float *sw,
+                    const int8_t *Xq, const float *sa,
+                    int M, int N, int Kp, int blk);
+
+#endif /* QWEN_TTS_KERNELS_H */

@@ -1,0 +1,219 @@
+# Custom Voices (`.qvoice`)
+
+Save a cloned voice to a `.qvoice` file once, then reuse it forever — on the Base model,
+on the CustomVoice model (with `--instruct` style control), on the server, with streaming.
+No re-extraction needed.
+
+> **Default clone is now x-vector-only (tiny 8 KB `.bin`).** For most uses — and
+> *especially* for emotion/`.expr`-driven generation — prefer the speaker **x-vector**
+> over a full ICL `.qvoice`. An ICL `.qvoice` carries `ref_codes` (the codec of the
+> reference *recording*), which re-injects that recording's room acoustics (a faint
+> "muffled metallic / reverb") into every generation — and an `.expr` amplifies it.
+> The x-vector carries abstract identity **without the room**: clean clone, identity
+> preserved, and more force headroom for the `.expr`.
+>
+> ```bash
+> # Extract the x-vector from an existing .qvoice into an 8 KB .bin
+> python3 tests/qvoice_to_xvec.py voices/mario.qvoice    # → voices/mario.bin
+>
+> # ...or clone straight to a .bin (no big .qvoice needed)
+> ./qwen_tts -d qwen3-tts-1.7b-base --ref-audio ref24k.wav -l Italian \
+>     --xvector-only --save-voice voices/mario.bin
+>
+> # Use it (x-vector-only path)
+> ./qwen_tts -d qwen3-tts-1.7b --load-voice voices/mario.bin --xvector-only \
+>     --text "Ciao, come stai?" -o output.wav
+> ```
+>
+> Keep the `.qvoice` / `--icl-only` path below as the **alternative for maximum timbre
+> mimicry** from a studio-clean reference. The multi-GB WDELTA `.qvoice` is **not** needed
+> for the x-vector path. See also [CSP-FT emotion](csp-ft-emotion.md) and
+> [ICL graft portability](icl-graft-portability.md).
+
+## Delta Format (`.qvoice` — for maximum timbre mimicry)
+
+The Delta format is the recommended way to create custom voices. It produces output that is
+**bit-identical** to a direct Base model clone, while running on the faster CustomVoice model.
+
+### How It Works
+
+Base and CustomVoice models share **99.98% identical transformer weights**. The only meaningful
+differences are in the codec embedding table and a few special tokens. The Delta format exploits
+this by storing only the per-weight differences (int16 deltas, LZ4 compressed). At load time,
+these deltas patch the CustomVoice weights to exactly match the Base model — producing
+PCM-level bit-identical output.
+
+For the full technical analysis, see [blog/cross-model-voice-analysis.md](../blog/cross-model-voice-analysis.md).
+
+### Creating a voice — the ~25 MB graft `.qvoice` (RECOMMENDED, the default)
+
+`--save-voice X.qvoice` (WITHOUT `--target-cv`) writes the **graft**: x-vector + TPAD + WOVR, no
+multi-GB WDELTA → **~16 MB (0.6B) / ~25 MB (1.7B)**. Load it with **`--icl-only`** and it keeps the
+CustomVoice weights, so **emotion works** (`--emotion`, `--instruct`, `--expr`, `--ml-steer`) with full
+prosody (sighs/pauses). This is the recommended clone for everything.
+
+**Always specify `-l`** with the language of the reference audio — it's saved in the `.qvoice` and auto-applied.
+
+```bash
+# create (Base model only) — produces the ~25MB graft by default
+./qwen_tts -d qwen3-tts-1.7b-base --ref-audio mario.wav -l Italian \
+    --voice-name "Mario" --save-voice mario.qvoice
+
+# use it (CustomVoice model + the graft) — --icl-only keeps CV weights so emotion works
+./qwen_tts -d qwen3-tts-1.7b --load-voice mario.qvoice --icl-only \
+    --emotion sad --text "Una notizia importante." -o sad.wav
+```
+
+An **8 KB `.bin`** (`--xvector-only --save-voice mario.bin`) is the ultra-lean alternative — identity only,
+drops the micro-prosody (sighs/pauses). See [icl-graft-portability.md](icl-graft-portability.md).
+
+## ⚠️ DEPRECATED — the heavy WDELTA Delta `.qvoice` (`--target-cv`)
+
+> **Discouraged. Will be removed.** The `--target-cv` path swaps the CustomVoice weights for the Base
+> model's via a multi-GB WDELTA (**785 MB / 2.8 GB**) → bit-identical-to-Base output, but it **freezes the
+> instruct/emotion machinery** (a known metallic, emotion-dead path) and is huge. Use the **graft** above
+> instead — it keeps emotion AND identity at ~25 MB. The heavy path is documented only for legacy/exact-
+> fidelity edge cases and is slated for removal.
+
+```bash
+# DEPRECATED: bit-identical exact-fidelity clone (multi-GB, emotion-frozen)
+./qwen_tts -d qwen3-tts-1.7b-base --ref-audio mario.wav -l Italian \
+    --voice-name "Mario" --target-cv qwen3-tts-1.7b --save-voice mario_wdelta.qvoice
+```
+
+## Comparison
+
+| | **graft `.qvoice`** (recommended) | `.bin` x-vector | ~~WDELTA Delta~~ (deprecated, `--target-cv`) |
+|---|---|---|---|
+| **File size (0.6B / 1.7B)** | **16 MB / 25 MB** | 8 KB | ~~785 MB / 2.8 GB~~ |
+| **Emotion / instruct / `--expr` / steer** | **✅ full** | ✅ (identity-only timbre) | ❌ frozen (metallic) |
+| **Prosody (sighs/pauses)** | ✅ full | partial | ✅ (but emotion-dead) |
+| **Models to create** | Base only | Base only | Base + CustomVoice |
+| **Load with** | `--icl-only` | `--xvector-only` | (plain `--load-voice`) |
+
+**Use the graft.** The `.bin` only for ultra-lean identity-only. The WDELTA path is deprecated.
+
+**When to use Standard:** You want a small portable file and "close enough" is fine,
+or you only run on the Base model.
+
+**When to use x-vector-only (`.bin`, the default):** Emotion/`.expr`-driven generation,
+or any reference that isn't studio-clean. The x-vector preserves identity without the
+reference recording's room acoustics, and leaves more force headroom for the `.expr`
+(see callout at the top). Recommended emotion/expr settings: x-vector clone @ **T1.3,
+`--expr-weight ~1.6–2.0`** (anger ~2.0); preset voices @ T1.1, ~1.0–1.2. Pushing
+`w2.5/T1.3` over-steers (the voice *svaria* and loses the language).
+
+## Managing Voice Profiles
+
+These commands don't require a model — they read/manage `.qvoice` files directly.
+
+```bash
+# List all .qvoice files in a directory
+./qwen_tts --list-voices ./my_voices/
+
+# Inspect a single .qvoice file
+./qwen_tts --list-voices my_voice.qvoice
+
+# Delete a voice profile
+./qwen_tts --delete-voice ./my_voices/old_voice.qvoice
+```
+
+Example output:
+
+```
+Voice profiles in my_voices/:
+  mario_06b.qvoice     v3    375 frames (30.0s ref)  804134.5 KB  [Mario]  lang=Italian  model=0.6B
+  peter_17b.qvoice     v3    375 frames (30.0s ref)  2969485.2 KB  [Peter]   lang=English  model=1.7B
+  2 voice profile(s)
+```
+
+## `.qvoice` v3 Metadata
+
+Voice files include metadata that prevents common mistakes:
+
+```bash
+# Language is auto-set when loading (no need for -l flag)
+./qwen_tts -d qwen3-tts-0.6b --load-voice mario_06b.qvoice --text "Ciao!"
+#   Auto-set language from voice: Italian
+
+# Warning if you override with wrong language
+./qwen_tts -d qwen3-tts-0.6b --load-voice mario_06b.qvoice -l English --text "Hello"
+#   WARNING: voice was created with language 'Italian' but you specified 'English'
+```
+
+### What's stored in a `.qvoice` v3 file
+
+| Section | Content | Notes |
+|---------|---------|-------|
+| Header | Version, enc_dim, flags | Compatibility checks |
+| Speaker embedding | Float32 vector (1024 or 2048-dim) | From ECAPA-TDNN encoder |
+| Reference text | UTF-8 string | Original transcription (if provided) |
+| Reference codes | Codec tokens (16 codebooks × N frames) | For in-context learning |
+| Metadata | Voice name, language, source model size | Auto-applied at load time |
+| Weight deltas (Delta only) | Int16 deltas, LZ4 compressed | Per-tensor, ~785 MB for 0.6B |
+
+### File naming convention
+
+Include the target model size to avoid confusion:
+- `mario_06b.qvoice` — for 0.6B CustomVoice
+- `mario_17b.qvoice` — for 1.7B CustomVoice
+
+Delta files must match the target CV model exactly.
+
+## Server with Custom Voices
+
+Load a `.qvoice` at server startup — WDELTA decompression happens once, then all
+requests use the custom voice with zero overhead.
+
+```bash
+./qwen_tts -d qwen3-tts-0.6b --load-voice mario.qvoice --serve 8080
+
+# Clients don't need to specify language or speaker
+curl -s http://localhost:8080/v1/tts -d '{"text":"Ciao!"}' -o out.wav
+curl -sN http://localhost:8080/v1/tts/stream -d '{"text":"Ciao!"}' | \
+  play -t raw -r 24000 -e signed -b 16 -c 1 -
+```
+
+**RTF with custom voice** (Apple M1, 4 threads, Italian, seed 42):
+
+| Mode | 0.6B RTF | 1.7B RTF |
+|------|----------|----------|
+| CLI | 1.48 | — |
+| Server (warm) | **1.44** | 3.32 |
+| Server stream | **1.48** | 3.18 |
+| Server (cold) | 2.01 | 3.57 |
+
+Custom voices have **no meaningful RTF penalty** compared to preset voices.
+The cold/warm gap is OS page cache (first request pages in mmap'd weights from SSD).
+
+> **Note:** Per-request voice switching is not supported. WDELTA weight application
+> modifies the model weights in-place — too heavy for hot-swap. Start one server
+> per voice if you need multiple custom voices.
+
+## Troubleshooting
+
+**"ERROR: .qvoice enc_dim mismatch"** — The `.qvoice` was created with a different model
+size. A file from 0.6B-Base (`enc_dim=1024`) cannot be used on 1.7B and vice versa.
+Create separate files per model size (e.g., `mario_06b.qvoice`, `mario_17b.qvoice`).
+
+**"ERROR: WDELTA target_hidden_size mismatch"** — The delta `.qvoice` was created with
+`--target-cv` pointing to a different model size. A delta targeting 0.6B cannot be loaded on 1.7B.
+
+**"ERROR: WDELTA voices cannot be loaded on Base models"** — Delta `.qvoice` files must
+be loaded on the corresponding CustomVoice model, not on a Base model.
+
+**Voice sounds different than the original clone** — Expected with standard (non-delta)
+`.qvoice` on CustomVoice. Use `--target-cv` when creating for bit-identical output.
+
+**Language mismatch warning** — The `.qvoice` stores the language used during creation.
+Omit `-l` to use the voice's native language from `.qvoice` metadata.
+
+## Model Compatibility Matrix
+
+| Model Type | Use Case | Voice Source | Style Control | Clone Fidelity |
+|------------|----------|-------------|---------------|----------------|
+| **Base** | Direct voice clone | `--ref-audio` / `.qvoice` | None | Perfect |
+| **CustomVoice** | Preset voices | 9 built-in | `--instruct` (1.7B) | N/A |
+| **CustomVoice + .qvoice delta** | Custom cloned voice | `.qvoice` from Base | `--instruct` (1.7B) | **Perfect** (bit-identical) |
+| **CustomVoice + .qvoice standard** | Custom cloned voice | `.qvoice` from Base | `--instruct` (1.7B) | Good (prosody varies) |
+| **VoiceDesign** | Voice from description | Text description | `--instruct` | N/A |

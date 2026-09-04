@@ -1,0 +1,21 @@
+{
+  "_doc": "CANONICAL paralinguistic tag map — SINGLE SOURCE OF TRUTH for BOTH the trainer (data preprocessing) AND the C engine (encode carve-out). Each user-facing [tag] maps to an EXISTING reserved Qwen special-token id that the TTS pipeline never uses (LLM vision/box/quad/tool/fim/think slots). The FT RE-TRAINS that embedding row to mean the paralinguistic event. NO embedding resize needed. The 'token' is the existing special-token string HF tokenizes atomically to 'id'; the trainer replaces [tag] -> token in the transcript before tokenizing; the engine maps [tag] -> id in encode_with_special. Keep [tag], id, token in lockstep on both sides.",
+  "map": {
+    "[laugh]":    {"id": 151646, "token": "<|object_ref_start|>"},
+    "[sigh]":     {"id": 151647, "token": "<|object_ref_end|>"},
+    "[cough]":    {"id": 151648, "token": "<|box_start|>"},
+    "[breath]":   {"id": 151649, "token": "<|box_end|>"},
+    "[sniff]":    {"id": 151650, "token": "<|quad_start|>"},
+    "[sneeze]":   {"id": 151651, "token": "<|quad_end|>"},
+    "[yawn]":     {"id": 151652, "token": "<|vision_start|>"},
+    "[uhm]":      {"id": 151653, "token": "<|vision_end|>"},
+    "[cry]":      {"id": 151654, "token": "<|vision_pad|>"},
+    "[surprise]": {"id": 151655, "token": "<|image_pad|>"},
+    "[confirm]":  {"id": 151656, "token": "<|video_pad|>"},
+    "[question]": {"id": 151657, "token": "<tool_call>"},
+    "[grumble]":  {"id": 151658, "token": "</tool_call>"},
+    "[shh]":      {"id": 151659, "token": "<|fim_prefix|>"},
+    "[gasp]":     {"id": 151660, "token": "<|fim_middle|>"},
+    "[groan]":    {"id": 151661, "token": "<|fim_suffix|>"}
+  }
+}

@@ -1,0 +1,61 @@
+name: Code Quality
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  codeql:
+    name: CodeQL Analysis
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libopenblas-dev
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: c-cpp
+
+      - name: Build
+        run: make blas
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
+
+  clang-tidy:
+    name: clang-tidy
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libopenblas-dev clang-tidy
+
+      - name: Run clang-tidy
+        run: |
+          clang-tidy \
+            -checks='clang-analyzer-core.*,clang-analyzer-unix.*,clang-analyzer-security.*,-clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,-clang-analyzer-deadcode.DeadStores,bugprone-*,-bugprone-easily-swappable-parameters,-bugprone-narrowing-conversions,-bugprone-implicit-widening-of-multiplication-result,-bugprone-suspicious-realloc-usage,-bugprone-multi-level-implicit-pointer-conversion,-bugprone-misplaced-widening-cast,-bugprone-branch-clone' \
+            -warnings-as-errors='' \
+            -p . \
+            --extra-arg='-DUSE_BLAS' \
+            --extra-arg='-DUSE_OPENBLAS' \
+            --extra-arg='-I/usr/include/openblas' \
+            --extra-arg='-Ithird_party/ingot/include' \
+            main.c qwen_tts.c qwen_tts_talker.c qwen_tts_code_predictor.c \
+            qwen_tts_speech_decoder.c qwen_tts_kernels.c qwen_tts_audio.c \
+            qwen_tts_sampling.c qwen_tts_tokenizer.c \
+            qwen_tts_server.c qwen_tts_voice_clone.c qwen_tts_speech_encoder.c \
+            -- -I/usr/include/openblas -Ithird_party/ingot/include

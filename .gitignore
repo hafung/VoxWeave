@@ -1,0 +1,17 @@
+node_modules/
+dist/
+dist-electron/
+release/
+release-*/
+resources/models/
+resources/engine/
+resources/ffmpeg/
+engine/qwen3-tts-c/*.o
+engine/qwen3-tts-c/*.d
+engine/qwen3-tts-c/*.exe
+engine/qwen3-tts-c/qwen_tts
+.DS_Store
+*.log
+.env
+.env.*
+!.env.example
