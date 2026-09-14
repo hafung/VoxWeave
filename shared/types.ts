@@ -48,11 +48,13 @@ export interface ProgressEvent {
 export interface VoxWeaveApi {
   getStatus(): Promise<EngineStatus>;
   configure(config: { enginePath?: string; modelDir?: string }): Promise<EngineStatus>;
-  chooseFile(kind: 'audio' | 'engine' | 'model'): Promise<string | null>;
+  chooseFile(kind: 'audio' | 'video' | 'engine' | 'model'): Promise<string | null>;
   chooseOutput(defaultName: string, format?: AudioFormat): Promise<string | null>;
+  createDraftPlan(request: DraftPlanRequest): Promise<EditPlan>;
   synthesize(request: SynthesisRequest): Promise<{ jobId: string }>;
   cancel(jobId: string): Promise<void>;
   reveal(path: string): Promise<void>;
   openPath(path: string): Promise<void>;
   onProgress(listener: (event: ProgressEvent & { jobId: string }) => void): () => void;
 }
+import type { DraftPlanRequest, EditPlan } from './edit-plan.js';

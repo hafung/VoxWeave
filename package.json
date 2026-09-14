@@ -3,10 +3,12 @@
   "version": "0.2.1",
   "packageManager": "pnpm@10.33.0",
   "private": true,
-  "description": "声织 VoxWeave — local-first voice creation studio powered by Qwen3-TTS",
+  "description": "声织 VoxWeave — local-first automatic video creation studio",
   "author": "VoxWeave Contributors",
   "main": "dist-electron/electron/main.js",
-  "bin": {"voxweave": "dist-electron/cli/voxweave.js"},
+  "bin": {
+    "voxweave": "dist-electron/cli/voxweave.js"
+  },
   "type": "module",
   "scripts": {
     "dev": "pnpm build:preload && concurrently -k \"vite\" \"tsc -p tsconfig.electron.json --watch\" \"wait-on tcp:5173 file:dist-electron/electron/main.js file:dist-electron/electron/preload.cjs && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .\"",
@@ -21,11 +23,17 @@
   "dependencies": {
     "@fontsource-variable/manrope": "^5.2.8",
     "@fontsource-variable/noto-sans-sc": "^5.2.8",
+    "@hyperframes/player": "0.8.38",
+    "@hyperframes/producer": "0.8.38",
+    "@node-rs/jieba": "2.0.3",
     "commander": "^14.0.0",
     "electron-store": "^11.0.2",
     "lucide-react": "^0.468.0",
+    "puppeteer": "25.10.0",
+    "puppeteer-core": "25.10.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
+    "sherpa-onnx-node": "1.13.8",
     "zod": "^4.1.5"
   },
   "devDependencies": {
@@ -35,7 +43,7 @@
     "@vitejs/plugin-react": "^5.0.2",
     "concurrently": "^9.2.1",
     "cross-env": "^10.0.0",
-    "electron": "^37.3.1",
+    "electron": "^44.3.0",
     "electron-builder": "^26.0.12",
     "esbuild": "^0.28.2",
     "tsx": "^4.20.5",
@@ -48,11 +56,38 @@
     "appId": "studio.voxweave.app",
     "productName": "声织 VoxWeave",
     "asar": true,
-    "files": ["dist/**/*", "dist-electron/**/*", "package.json", "LICENSES.md"],
-    "extraResources": [{"from": "resources", "to": ".", "filter": ["**/*"]}],
-    "directories": {"output": "release"},
-    "win": {"target": ["nsis", "portable"]},
-    "nsis": {"artifactName": "VoxWeave-Setup-${version}-${arch}.${ext}", "oneClick": false, "allowToChangeInstallationDirectory": true, "createDesktopShortcut": true},
-    "portable": {"artifactName": "VoxWeave-Portable-${version}-${arch}.${ext}"}
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "package.json",
+      "LICENSES.md"
+    ],
+    "extraResources": [
+      {
+        "from": "resources",
+        "to": ".",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "artifactName": "VoxWeave-Setup-${version}-${arch}.${ext}",
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true
+    },
+    "portable": {
+      "artifactName": "VoxWeave-Portable-${version}-${arch}.${ext}"
+    }
   }
 }

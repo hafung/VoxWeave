@@ -5,6 +5,8 @@ import { existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { QwenEngine, type EngineConfig } from './engine.js';
+import { planDraft } from './composition/planner.js';
+import { EditPlanStore } from './composition/project-store.js';
 import type { AudioFormat, SynthesisRequest } from '../shared/types.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -74,25 +76,36 @@ if (cliMode) {
   process.env.VOXWEAVE_FFMPEG ??= path.join(process.resourcesPath, 'ffmpeg', 'ffmpeg.exe');
   void import('../cli/voxweave.js');
 } else app.whenReady().then(() => {
+  const editPlans = new EditPlanStore(path.join(app.getPath('userData'), 'projects'));
   ipcMain.handle('engine:status', () => configuredEngine().status());
   ipcMain.handle('engine:configure', async (_event, config: EngineConfig) => {
     if (config.enginePath !== undefined) store.set('enginePath', config.enginePath);
     if (config.modelDir !== undefined) store.set('modelDir', config.modelDir);
     return configuredEngine().status();
   });
-  ipcMain.handle('dialog:choose-file', async (_event, kind: 'audio' | 'engine' | 'model') => {
+  ipcMain.handle('dialog:choose-file', async (_event, kind: 'audio' | 'video' | 'engine' | 'model') => {
     if (kind === 'model') {
       const result = await dialog.showOpenDialog({ properties: ['openDirectory'], title: '选择 Qwen3-TTS 模型目录' });
       return result.canceled ? null : result.filePaths[0];
     }
-    const filters = kind === 'audio' ? [{ name: '音频', extensions: ['wav', 'flac', 'mp3', 'ogg', 'opus', 'm4a', 'aac'] }] : [{ name: 'Qwen3-TTS 引擎', extensions: ['exe', 'bin', '*'] }];
-    const result = await dialog.showOpenDialog({ properties: ['openFile'], filters, title: kind === 'audio' ? '选择参考音频' : '选择 qwen_tts 引擎' });
+    const filters = kind === 'audio'
+      ? [{ name: '音频', extensions: ['wav', 'flac', 'mp3', 'ogg', 'opus', 'm4a', 'aac'] }]
+      : kind === 'video'
+        ? [{ name: '视频', extensions: ['mp4', 'mov', 'mkv', 'webm', 'avi', 'm4v'] }]
+        : [{ name: 'Qwen3-TTS 引擎', extensions: ['exe', 'bin', '*'] }];
+    const title = kind === 'audio' ? '选择参考音频' : kind === 'video' ? '选择原始视频' : '选择 qwen_tts 引擎';
+    const result = await dialog.showOpenDialog({ properties: ['openFile'], filters, title });
     return result.canceled ? null : result.filePaths[0];
   });
   ipcMain.handle('dialog:choose-output', async (_event, defaultName: string, format: AudioFormat = 'wav') => {
     const labels: Record<AudioFormat, string> = { wav: 'WAV 无损音频', flac: 'FLAC 无损音频', mp3: 'MP3 音频', opus: 'Ogg Opus 音频', m4a: 'M4A / AAC 音频' };
     const result = await dialog.showSaveDialog({ defaultPath: defaultName, filters: [{ name: labels[format], extensions: [format === 'opus' ? 'ogg' : format] }] });
     return result.canceled ? null : result.filePath;
+  });
+  ipcMain.handle('composition:create-draft', async (_event, request: unknown) => {
+    const plan = planDraft(request);
+    await editPlans.save(plan);
+    return plan;
   });
   ipcMain.handle('engine:synthesize', (event, request: SynthesisRequest) => {
     const jobId = randomUUID(); const engine = configuredEngine(); jobs.set(jobId, engine);

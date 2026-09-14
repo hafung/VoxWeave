@@ -6,6 +6,7 @@ const api: VoxWeaveApi = {
   configure: config => ipcRenderer.invoke('engine:configure', config),
   chooseFile: kind => ipcRenderer.invoke('dialog:choose-file', kind),
   chooseOutput: (defaultName, format) => ipcRenderer.invoke('dialog:choose-output', defaultName, format),
+  createDraftPlan: request => ipcRenderer.invoke('composition:create-draft', request),
   synthesize: request => ipcRenderer.invoke('engine:synthesize', request),
   cancel: jobId => ipcRenderer.invoke('engine:cancel', jobId),
   reveal: path => ipcRenderer.invoke('shell:reveal', path),
