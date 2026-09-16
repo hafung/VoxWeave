@@ -1,35 +1,179 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, net, protocol, shell, type WebContents } from 'electron';
 import Store from 'electron-store';
 import path from 'node:path';
 import { existsSync } from 'node:fs';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { z } from 'zod';
 import { QwenEngine, type EngineConfig } from './engine.js';
 import { planDraft } from './composition/planner.js';
 import { EditPlanStore } from './composition/project-store.js';
-import type { AudioFormat, SynthesisRequest } from '../shared/types.js';
+import { NarrationService } from './composition/narration.js';
+import { QwenNarrationSynthesizer } from './composition/qwen-narration.js';
+import { resolveEditPlan } from './composition/resolver.js';
+import { FallbackMediaProbe, FfprobeMediaProbe } from './media/probe.js';
+import { HyperframesPreviewRenderer } from './renderers/hyperframes.js';
+import { PreviewRegistry } from './renderers/preview-registry.js';
+import { LibraryDatabase } from './library/database.js';
+import { AssetImporter, FfmpegThumbnailer } from './library/importer.js';
+import { replaceSceneAsset } from './library/replace-scene.js';
+import { selectBroll } from './library/selector.js';
+import { alignedCaptionCues } from './alignment/align-text.js';
+import { alignWithSenseVoiceProcess } from './alignment/sensevoice-process.js';
+import { DraftPlanRequestSchema, EditPlanSchema, type EditPlan } from '../shared/edit-plan.js';
+import { ImportAssetRequestSchema } from '../shared/library.js';
+import { LANGUAGES, type AudioFormat, type CompositionProgressEvent, type GenerateCompositionRequest, type SynthesisRequest } from '../shared/types.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const devServerUrl = process.env.VITE_DEV_SERVER_URL;
 const isDev = Boolean(devServerUrl);
-const store = new Store<EngineConfig>({ name: 'settings', defaults: {} });
-const jobs = new Map<string, QwenEngine>();
 
-function asWslPath(file: string): string {
-  const match = /^([A-Za-z]):\\(.*)$/.exec(path.resolve(file));
-  return match ? `/mnt/${match[1].toLowerCase()}/${match[2].replaceAll('\\', '/')}` : file;
+interface Settings extends EngineConfig { lastProjectId?: string }
+const settings = new Store<Settings>({ name: 'settings', defaults: {} });
+const audioJobs = new Map<string, QwenEngine>();
+const compositionJobs = new Map<string, { controller: AbortController; engine: QwenEngine }>();
+const previews = new PreviewRegistry();
+const allowedShellPaths = new Set<string>();
+
+protocol.registerSchemesAsPrivileged([{
+  scheme: 'voxweave-preview',
+  privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true }
+}]);
+
+const GenerateCompositionRequestSchema = DraftPlanRequestSchema.extend({
+  language: z.enum(LANGUAGES).optional(),
+  temperature: z.number().min(0.1).max(1.2).optional(),
+  precision: z.enum(['bf16', 'int8', 'int4']).optional()
+}).strict();
+
+function resourceRoot(): string {
+  return process.env.VOXWEAVE_RESOURCE_ROOT
+    ? path.resolve(process.env.VOXWEAVE_RESOURCE_ROOT)
+    : isDev ? path.resolve(__dirname, '..', '..', 'resources') : process.resourcesPath;
+}
+
+function configuredPaths() {
+  const root = resourceRoot();
+  const bundledFfmpeg = path.join(root, 'ffmpeg', 'ffmpeg.exe');
+  const bundledFfprobe = path.join(root, 'ffmpeg', 'ffprobe.exe');
+  return {
+    enginePath: process.env.VOXWEAVE_ENGINE ?? settings.get('enginePath') ?? path.join(root, 'engine', 'qwen_tts.exe'),
+    modelDir: process.env.VOXWEAVE_MODEL ?? settings.get('modelDir') ?? path.join(root, 'models', 'qwen3-tts-0.6b-customvoice'),
+    ffmpegPath: existsSync(bundledFfmpeg) ? bundledFfmpeg : process.env.VOXWEAVE_FFMPEG,
+    ffprobePath: existsSync(bundledFfprobe) ? bundledFfprobe : process.env.VOXWEAVE_FFPROBE
+  };
 }
 
 function configuredEngine(): QwenEngine {
-  const resourceRoot = isDev ? path.resolve(__dirname, '..', '..', 'resources') : process.resourcesPath;
-  const nativeEngine = path.join(resourceRoot, 'engine', 'qwen_tts.exe');
-  const bundledModel = path.join(resourceRoot, 'models', 'qwen3-tts-0.6b-base');
-  const ffmpegPath = path.join(resourceRoot, 'ffmpeg', 'ffmpeg.exe');
-  return new QwenEngine({
-    enginePath: store.get('enginePath') ?? process.env.VOXWEAVE_ENGINE ?? nativeEngine,
-    modelDir: store.get('modelDir') ?? process.env.VOXWEAVE_MODEL ?? bundledModel,
-    ffmpegPath: existsSync(ffmpegPath) ? ffmpegPath : process.env.VOXWEAVE_FFMPEG
+  const { enginePath, modelDir, ffmpegPath } = configuredPaths();
+  return new QwenEngine({ enginePath, modelDir, ffmpegPath });
+}
+
+function sendComposition(sender: WebContents, event: CompositionProgressEvent): void {
+  if (!sender.isDestroyed()) sender.send('composition:progress', event);
+}
+
+async function runCompositionSmoke(window: BrowserWindow, resultPath: string): Promise<void> {
+  const request = JSON.stringify({
+    script: '你好。', voiceId: 'vivian', aspectRatio: '9:16', captionStyle: 'commerce-bold',
+    language: 'Chinese', precision: 'int8'
   });
+  const result = await window.webContents.executeJavaScript(`new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('composition/player smoke timed out')), 120000);
+    let stopped = false;
+    const finish = (callback, value) => {
+      if (stopped) return;
+      stopped = true;
+      clearTimeout(timeout);
+      unsubscribe();
+      callback(value);
+    };
+    const waitForPlayer = (event) => {
+      const started = Date.now();
+      const poll = () => {
+        const error = document.querySelector('.preview-error')?.textContent?.trim();
+        if (error) return finish(reject, new Error(error));
+        const player = document.querySelector('hyperframes-player');
+        if (player?.ready && player.getAttribute('src') === event.preview.entryUrl) {
+          const observedDuration = player.duration;
+          player.muted = true;
+          player.seek(Math.min(0.25, observedDuration / 2));
+          player.play();
+          setTimeout(() => {
+            player.pause();
+            const settleStarted = Date.now();
+            const settle = () => {
+              const currentPlayer = document.querySelector('hyperframes-player');
+              if ((!currentPlayer?.ready || !currentPlayer.isConnected) && Date.now() - settleStarted < 5000) return setTimeout(settle, 100);
+              if (!currentPlayer) return finish(reject, new Error('HyperFrames Player was removed during playback'));
+              currentPlayer.seek(Math.min(0.25, observedDuration / 2));
+              setTimeout(() => finish(resolve, {
+                projectId: event.plan?.id,
+                revision: event.plan?.revision,
+                status: event.plan?.status,
+                captionText: event.plan?.captions?.map(cue => cue.text).join(''),
+                previewUrl: event.preview?.entryUrl,
+                durationMs: event.preview?.durationMs,
+                playerReadyObserved: true,
+                playerReadyAfterPlayback: currentPlayer.ready,
+                playerDurationSeconds: observedDuration,
+                playerCurrentTimeSeconds: currentPlayer.currentTime,
+                playerScenes: currentPlayer.scenes?.length ?? 0,
+                playerWasReplaced: currentPlayer !== player,
+                playerBounds: (() => { const rect = currentPlayer.getBoundingClientRect(); return { x: rect.x, y: rect.y, width: rect.width, height: rect.height }; })()
+              }), 250);
+            };
+            settle();
+          }, 350);
+          return;
+        }
+        if (Date.now() - started > 20000) return finish(reject, new Error('HyperFrames Player did not become ready'));
+        setTimeout(poll, 100);
+      };
+      poll();
+    };
+    const unsubscribe = window.voxweave.onCompositionProgress(event => {
+      if (event.phase === 'error' || event.phase === 'cancelled') finish(reject, new Error(event.message));
+      else if (event.phase === 'complete' && event.preview) waitForPlayer(event);
+    });
+    window.voxweave.generateComposition(${request}).catch(error => finish(reject, error));
+  })`, true) as Record<string, unknown>;
+  const previewFrames = await Promise.all(window.webContents.mainFrame.framesInSubtree
+    .filter(frame => frame !== window.webContents.mainFrame)
+    .map(async frame => ({
+      url: frame.url,
+      state: await frame.executeJavaScript(`({
+        readyState: document.readyState,
+        timelineKeys: Object.keys(window.__timelines || {}),
+        timelines: Object.fromEntries(Object.entries(window.__timelines || {}).map(([key, timeline]) => [key, {duration: timeline.duration(), time: timeline.time(), paused: timeline.paused()}])),
+        timedElements: [...document.querySelectorAll('[data-animate-start]')].map(element => ({id: element.id, display: getComputedStyle(element).display, visibility: getComputedStyle(element).visibility, opacity: getComputedStyle(element).opacity})),
+        compositions: [...document.querySelectorAll('[data-composition-id]')].map(element => ({id: element.id, compositionId: element.dataset.compositionId, visibility: getComputedStyle(element).visibility, opacity: getComputedStyle(element).opacity}))
+      })`, true)
+    })));
+  const screenshotPath = process.env.VOXWEAVE_COMPOSITION_SMOKE_SCREENSHOT ?? `${resultPath}.png`;
+  await new Promise(resolve => setTimeout(resolve, 250));
+  const playerBounds = result.playerBounds as { x: number; y: number; width: number; height: number };
+  const previewScreenshot = await window.webContents.capturePage({
+    x: Math.floor(playerBounds.x), y: Math.floor(playerBounds.y),
+    width: Math.max(1, Math.floor(playerBounds.width)), height: Math.max(1, Math.floor(playerBounds.height * 0.85))
+  });
+  const previewBitmap = previewScreenshot.toBitmap();
+  const previewPixels = previewBitmap.length / 4;
+  let nonDarkPixels = 0;
+  for (let index = 0; index < previewBitmap.length; index += 4) {
+    if (previewBitmap[index] > 110 || previewBitmap[index + 1] > 110 || previewBitmap[index + 2] > 110) nonDarkPixels += 1;
+  }
+  const previewNonDarkPixelRatio = previewPixels ? nonDarkPixels / previewPixels : 0;
+  const screenshot = await window.webContents.capturePage();
+  await mkdir(path.dirname(screenshotPath), { recursive: true });
+  await writeFile(screenshotPath, screenshot.toPNG());
+  await mkdir(path.dirname(resultPath), { recursive: true });
+  await writeFile(resultPath, `${JSON.stringify({
+    ok: true, platform: process.platform, arch: process.arch,
+    electron: process.versions.electron, chrome: process.versions.chrome,
+    screenshotPath, previewFrames, previewNonDarkPixelRatio, ...result
+  }, null, 2)}\n`, 'utf8');
 }
 
 function createWindow(): void {
@@ -46,44 +190,103 @@ function createWindow(): void {
     h1{font-size:20px;letter-spacing:.04em;margin:0 0 6px}h1 span{color:#82868d;font-size:11px;font-weight:500;letter-spacing:.12em;margin-left:7px}p{margin:0;color:#858990;font-size:11px}
     .loader{width:178px;height:3px;margin:22px auto 0;background:#24272b;border-radius:5px;overflow:hidden}.loader:after{content:"";display:block;width:45%;height:100%;border-radius:5px;background:#d9ff69;animation:load 1.25s ease-in-out infinite}
     @keyframes wave{0%,100%{transform:scaleY(.58)}50%{transform:scaleY(1)}}@keyframes pulse{65%,100%{box-shadow:0 0 0 22px rgba(217,255,105,0)}}@keyframes load{0%{transform:translateX(-105%)}100%{transform:translateX(325%)}}
-  </style></head><body><div class="shell"><div class="logo"><div class="bars"><i></i><i></i><i></i><i></i><i></i></div></div><h1>声织 <span>VOXWEAVE</span></h1><p>正在唤醒本地声音引擎…</p><div class="loader"></div></div></body></html>`;
+  </style></head><body><div class="shell"><div class="logo"><div class="bars"><i></i><i></i><i></i><i></i><i></i></div></div><h1>声织 <span>VOXWEAVE</span></h1><p>正在唤醒本地成片引擎…</p><div class="loader"></div></div></body></html>`;
   void splash.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(splashHtml)}`);
   splash.once('ready-to-show', () => splash.show());
   const splashStarted = Date.now();
   const window = new BrowserWindow({
-    width: 1480, height: 920, minWidth: 1120, minHeight: 720,
-    backgroundColor: '#0c0d10', titleBarStyle: 'hidden', titleBarOverlay: { color: '#0c0d10', symbolColor: '#92959d', height: 42 },
-    show: false,
+    width: 1480, height: 920, minWidth: 960, minHeight: 680,
+    backgroundColor: '#0c0d10', titleBarStyle: 'hidden',
+    titleBarOverlay: { color: '#0c0d10', symbolColor: '#92959d', height: 42 }, show: false,
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true }
   });
   window.once('ready-to-show', () => {
-    const remaining = Math.max(0, 650 - (Date.now() - splashStarted));
     setTimeout(() => {
       if (!splash.isDestroyed()) splash.close();
       window.show(); window.focus();
-    }, remaining);
+    }, Math.max(0, 650 - (Date.now() - splashStarted)));
+    const compositionSmokeResult = process.env.VOXWEAVE_COMPOSITION_SMOKE_RESULT;
+    const smokeResult = process.env.VOXWEAVE_SMOKE_RESULT;
+    if (compositionSmokeResult) {
+      void runCompositionSmoke(window, compositionSmokeResult).then(() => {
+        setTimeout(() => app.quit(), 350);
+      }).catch(async error => {
+        await mkdir(path.dirname(compositionSmokeResult), { recursive: true });
+        await writeFile(compositionSmokeResult, `${JSON.stringify({
+          ok: false, message: error instanceof Error ? error.message : String(error)
+        }, null, 2)}\n`, 'utf8');
+        console.error('Windows composition smoke failed', error);
+        app.exit(1);
+      });
+    } else if (process.env.VOXWEAVE_SMOKE_TEST === '1' && smokeResult) {
+      void (async () => {
+        await mkdir(path.dirname(smokeResult), { recursive: true });
+        await writeFile(smokeResult, `${JSON.stringify({
+          ok: true,
+          platform: process.platform,
+          arch: process.arch,
+          electron: process.versions.electron,
+          chrome: process.versions.chrome,
+          loadedUrl: window.webContents.getURL()
+        }, null, 2)}\n`, 'utf8');
+        setTimeout(() => app.quit(), 350);
+      })().catch(error => {
+        console.error('Windows smoke marker failed', error);
+        app.exit(1);
+      });
+    }
   });
   window.on('closed', () => { if (!splash.isDestroyed()) splash.close(); });
-  if (devServerUrl) window.loadURL(devServerUrl);
-  else window.loadFile(path.join(__dirname, '..', '..', 'dist', 'index.html'));
+  if (devServerUrl) void window.loadURL(devServerUrl);
+  else void window.loadFile(path.join(__dirname, '..', '..', 'dist', 'index.html'));
+}
+
+async function tryAlign(plan: EditPlan): Promise<EditPlan> {
+  const root = path.join(resourceRoot(), 'models', 'sensevoice-small');
+  const captions = [];
+  for (const segment of plan.narration.segments) {
+    if (!segment.audioPath) continue;
+    const { tokens: relativeTokens, speechEndMs } = await alignWithSenseVoiceProcess(root, segment.audioPath);
+    const tokens = relativeTokens.map(token => ({
+      ...token, startMs: token.startMs + segment.startMs,
+      endMs: token.endMs === undefined ? undefined : token.endMs + segment.startMs
+    }));
+    const acousticEndMs = speechEndMs === undefined ? segment.endMs : Math.min(segment.endMs, segment.startMs + speechEndMs);
+    captions.push(...alignedCaptionCues(segment.id, segment.text, tokens, segment.startMs, acousticEndMs));
+  }
+  if (!captions.length) return plan;
+  return EditPlanSchema.parse({ ...plan, revision: plan.revision + 1, updatedAt: new Date().toISOString(), captions });
 }
 
 const cliMode = process.argv.includes('--cli');
 if (cliMode) {
   process.argv.splice(process.argv.indexOf('--cli'), 1);
   process.env.VOXWEAVE_ENGINE ??= path.join(process.resourcesPath, 'engine', 'qwen_tts.exe');
-  process.env.VOXWEAVE_MODEL ??= path.join(process.resourcesPath, 'models', 'qwen3-tts-0.6b-base');
+  process.env.VOXWEAVE_MODEL ??= path.join(process.resourcesPath, 'models', 'qwen3-tts-0.6b-customvoice');
   process.env.VOXWEAVE_FFMPEG ??= path.join(process.resourcesPath, 'ffmpeg', 'ffmpeg.exe');
+  process.env.VOXWEAVE_FFPROBE ??= path.join(process.resourcesPath, 'ffmpeg', 'ffprobe.exe');
   void import('../cli/voxweave.js');
 } else app.whenReady().then(() => {
-  const editPlans = new EditPlanStore(path.join(app.getPath('userData'), 'projects'));
+  const projectsRoot = path.join(app.getPath('userData'), 'projects');
+  const editPlans = new EditPlanStore(projectsRoot);
+  const library = new LibraryDatabase(path.join(app.getPath('userData'), 'library', 'assets.sqlite'));
+  const probePath = configuredPaths().ffprobePath;
+  const mediaProbe = new FallbackMediaProbe(probePath ? new FfprobeMediaProbe(probePath) : undefined);
+
+  protocol.handle('voxweave-preview', request => {
+    try { return net.fetch(previews.resolve(request.url).href); }
+    catch (error) { return new Response(error instanceof Error ? error.message : String(error), { status: 404 }); }
+  });
+
   ipcMain.handle('engine:status', () => configuredEngine().status());
-  ipcMain.handle('engine:configure', async (_event, config: EngineConfig) => {
-    if (config.enginePath !== undefined) store.set('enginePath', config.enginePath);
-    if (config.modelDir !== undefined) store.set('modelDir', config.modelDir);
+  ipcMain.handle('engine:configure', async (_event, value: unknown) => {
+    const config = z.object({ enginePath: z.string().optional(), modelDir: z.string().optional() }).strict().parse(value);
+    if (config.enginePath !== undefined) settings.set('enginePath', config.enginePath);
+    if (config.modelDir !== undefined) settings.set('modelDir', config.modelDir);
     return configuredEngine().status();
   });
-  ipcMain.handle('dialog:choose-file', async (_event, kind: 'audio' | 'video' | 'engine' | 'model') => {
+  ipcMain.handle('dialog:choose-file', async (_event, value: unknown) => {
+    const kind = z.enum(['audio', 'video', 'engine', 'model']).parse(value);
     if (kind === 'model') {
       const result = await dialog.showOpenDialog({ properties: ['openDirectory'], title: '选择 Qwen3-TTS 模型目录' });
       return result.canceled ? null : result.filePaths[0];
@@ -93,30 +296,139 @@ if (cliMode) {
       : kind === 'video'
         ? [{ name: '视频', extensions: ['mp4', 'mov', 'mkv', 'webm', 'avi', 'm4v'] }]
         : [{ name: 'Qwen3-TTS 引擎', extensions: ['exe', 'bin', '*'] }];
-    const title = kind === 'audio' ? '选择参考音频' : kind === 'video' ? '选择原始视频' : '选择 qwen_tts 引擎';
-    const result = await dialog.showOpenDialog({ properties: ['openFile'], filters, title });
+    const result = await dialog.showOpenDialog({ properties: ['openFile'], filters, title: kind === 'audio' ? '选择参考音频' : kind === 'video' ? '选择原始视频' : '选择 qwen_tts 引擎' });
     return result.canceled ? null : result.filePaths[0];
   });
   ipcMain.handle('dialog:choose-output', async (_event, defaultName: string, format: AudioFormat = 'wav') => {
     const labels: Record<AudioFormat, string> = { wav: 'WAV 无损音频', flac: 'FLAC 无损音频', mp3: 'MP3 音频', opus: 'Ogg Opus 音频', m4a: 'M4A / AAC 音频' };
-    const result = await dialog.showSaveDialog({ defaultPath: defaultName, filters: [{ name: labels[format], extensions: [format === 'opus' ? 'ogg' : format] }] });
+    const result = await dialog.showSaveDialog({ defaultPath: path.basename(defaultName), filters: [{ name: labels[format], extensions: [format === 'opus' ? 'ogg' : format] }] });
+    if (!result.canceled && result.filePath) allowedShellPaths.add(path.resolve(result.filePath));
     return result.canceled ? null : result.filePath;
   });
   ipcMain.handle('composition:create-draft', async (_event, request: unknown) => {
-    const plan = planDraft(request);
-    await editPlans.save(plan);
-    return plan;
+    const plan = planDraft(request); await editPlans.save(plan); settings.set('lastProjectId', plan.id); return plan;
   });
+  ipcMain.handle('composition:generate', (event, input: unknown) => {
+    const request = GenerateCompositionRequestSchema.parse(input) as GenerateCompositionRequest;
+    const { language: _language, temperature: _temperature, precision: _precision, ...draftRequest } = request;
+    const plan = planDraft(draftRequest);
+    const jobId = randomUUID();
+    const controller = new AbortController();
+    const engine = configuredEngine();
+    compositionJobs.set(jobId, { controller, engine });
+    settings.set('lastProjectId', plan.id);
+    const projectDir = path.join(projectsRoot, plan.id);
+    const emit = (phase: CompositionProgressEvent['phase'], progress: number, message: string, extra: Partial<CompositionProgressEvent> = {}) =>
+      sendComposition(event.sender, { jobId, phase, progress, message, ...extra });
+    void (async () => {
+      await editPlans.save(plan);
+      emit('drafting', 0.04, '工程草稿已保存');
+      const paths = configuredPaths();
+      const narration = await new NarrationService({
+        cacheDir: path.join(app.getPath('userData'), 'cache', 'narration'),
+        synthesizer: new QwenNarrationSynthesizer(engine), probe: mediaProbe,
+        voice: {
+          language: request.language ?? 'Chinese', temperature: request.temperature ?? 0.5,
+          topK: 50, topP: 1, precision: request.precision ?? 'int8',
+          engineVersion: 'qwen3-tts-c-v0.2.1', modelVersion: path.basename(paths.modelDir ?? 'unknown-model')
+        }
+      }).generate(plan, path.join(projectDir, 'artifacts'), controller.signal, progress =>
+        emit('narrating', 0.05 + progress.progress * 0.55, progress.message));
+      emit('resolving', 0.63, '正在按真实旁白时长解析分镜…');
+      const sourceMetadata = plan.input.sourceVideoPath ? await mediaProbe.probe(plan.input.sourceVideoPath) : undefined;
+      let resolved = resolveEditPlan(plan, { narration, sourceMetadata });
+      await editPlans.save(resolved);
+      emit('aligning', 0.7, '正在检查 SenseVoice 精确对齐资源…');
+      try {
+        const aligned = await tryAlign(resolved);
+        if (aligned !== resolved) { resolved = aligned; await editPlans.save(resolved); }
+      } catch (error) {
+        emit('aligning', 0.74, `精确对齐暂不可用，使用 TTS 估时：${error instanceof Error ? error.message : String(error)}`);
+      }
+      emit('selecting', 0.78, '正在从本地素材库选择画面…');
+      const selected = selectBroll(resolved, library);
+      if (selected !== resolved) { resolved = selected; await editPlans.save(resolved); }
+      emit('compiling', 0.88, '正在编译固定模板预览…');
+      const previewWorkspace = path.join(projectDir, 'preview', `r${resolved.revision}`);
+      await mkdir(previewWorkspace, { recursive: true });
+      const renderer = new HyperframesPreviewRenderer(async assetId => {
+        if (assetId === 'source-video' && resolved.input.sourceVideoPath) return resolved.input.sourceVideoPath;
+        const asset = library.byId(assetId); if (!asset) throw new Error(`素材 ${assetId} 不存在`); return asset.filePath;
+      });
+      const prepared = await renderer.prepare(resolved, previewWorkspace);
+      const entryUrl = previews.register(`${resolved.id}-${resolved.revision}`, previewWorkspace);
+      emit('complete', 1, '自动成片预览已就绪', {
+        plan: resolved,
+        preview: { entryUrl, durationMs: prepared.durationMs, width: resolved.canvas.width, height: resolved.canvas.height }
+      });
+    })().catch(async error => {
+      const cancelled = controller.signal.aborted || (error instanceof Error && error.name === 'AbortError');
+      const message = error instanceof Error ? error.message : String(error);
+      let failedPlan: EditPlan | undefined;
+      if (!cancelled) {
+        try {
+          const current = await editPlans.read(plan.id);
+          failedPlan = EditPlanSchema.parse({
+            ...current, revision: current.revision + 1, updatedAt: new Date().toISOString(), status: 'error',
+            error: { code: 'COMPOSITION_FAILED', message }
+          });
+          await editPlans.save(failedPlan);
+        } catch { /* The last valid revision remains recoverable. */ }
+      }
+      emit(cancelled ? 'cancelled' : 'error', 0, cancelled ? '生成已取消，工程草稿已保留' : message, { recoverable: true, plan: failedPlan });
+    }).finally(() => compositionJobs.delete(jobId));
+    return { jobId, projectId: plan.id };
+  });
+  ipcMain.handle('composition:cancel', (_event, value: unknown) => {
+    const jobId = z.string().uuid().parse(value);
+    const job = compositionJobs.get(jobId); job?.controller.abort(); job?.engine.cancel();
+  });
+  ipcMain.handle('composition:resume-last', async () => {
+    const projectId = settings.get('lastProjectId');
+    if (!projectId) return null;
+    const plan = await editPlans.read(projectId);
+    if (plan.status !== 'resolved') return { plan };
+    const previewWorkspace = path.join(projectsRoot, plan.id, 'preview', `r${plan.revision}`);
+    const prepared = await new HyperframesPreviewRenderer(assetId => {
+      if (assetId === 'source-video' && plan.input.sourceVideoPath) return plan.input.sourceVideoPath;
+      const asset = library.byId(assetId); if (!asset) throw new Error(`素材 ${assetId} 不存在`); return asset.filePath;
+    }).prepare(plan, previewWorkspace);
+    return { plan, preview: { entryUrl: previews.register(`${plan.id}-${plan.revision}`, previewWorkspace), durationMs: prepared.durationMs, width: plan.canvas.width, height: plan.canvas.height } };
+  });
+  ipcMain.handle('composition:replace-scene', async (_event, projectIdValue: unknown, sceneIdValue: unknown) => {
+    const projectId = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u).parse(projectIdValue);
+    const sceneId = z.string().min(1).max(160).parse(sceneIdValue);
+    const plan = await editPlans.read(projectId);
+    const updated = replaceSceneAsset(plan, sceneId, library); await editPlans.save(updated);
+    const workspace = path.join(projectsRoot, updated.id, 'preview', `r${updated.revision}`);
+    const prepared = await new HyperframesPreviewRenderer(assetId => {
+      if (assetId === 'source-video' && updated.input.sourceVideoPath) return updated.input.sourceVideoPath;
+      const asset = library.byId(assetId); if (!asset) throw new Error(`素材 ${assetId} 不存在`); return asset.filePath;
+    }).prepare(updated, workspace);
+    return { plan: updated, preview: { entryUrl: previews.register(`${updated.id}-${updated.revision}`, workspace), durationMs: prepared.durationMs, width: updated.canvas.width, height: updated.canvas.height } };
+  });
+  ipcMain.handle('library:import', async () => {
+    const result = await dialog.showOpenDialog({ properties: ['openFile', 'multiSelections'], title: '导入本地素材', filters: [{ name: '媒体素材', extensions: ['mp4', 'mov', 'mkv', 'webm', 'jpg', 'jpeg', 'png', 'webp', 'wav', 'flac', 'mp3', 'm4a'] }] });
+    if (result.canceled) return [];
+    const ffmpegPath = configuredPaths().ffmpegPath;
+    const importer = new AssetImporter(library, mediaProbe, path.join(app.getPath('userData'), 'library', 'derived'), ffmpegPath ? new FfmpegThumbnailer(ffmpegPath) : undefined);
+    return Promise.all(result.filePaths.map(filePath => importer.import(ImportAssetRequestSchema.parse({ filePath }))));
+  });
+  ipcMain.handle('library:list', () => library.list());
   ipcMain.handle('engine:synthesize', (event, request: SynthesisRequest) => {
-    const jobId = randomUUID(); const engine = configuredEngine(); jobs.set(jobId, engine);
+    const jobId = randomUUID(); const engine = configuredEngine(); audioJobs.set(jobId, engine);
     void engine.synthesize(request, progress => event.sender.send('engine:progress', { ...progress, jobId }))
       .catch(error => event.sender.send('engine:progress', { jobId, phase: 'error', message: error instanceof Error ? error.message : String(error) }))
-      .finally(() => jobs.delete(jobId));
+      .finally(() => audioJobs.delete(jobId));
     return { jobId };
   });
-  ipcMain.handle('engine:cancel', (_event, jobId: string) => { jobs.get(jobId)?.cancel(); jobs.delete(jobId); });
-  ipcMain.handle('shell:reveal', (_event, target: string) => shell.showItemInFolder(path.resolve(target)));
-  ipcMain.handle('shell:open', async (_event, target: string) => { await shell.openPath(path.resolve(target)); });
+  ipcMain.handle('engine:cancel', (_event, jobId: string) => { audioJobs.get(jobId)?.cancel(); audioJobs.delete(jobId); });
+  ipcMain.handle('shell:reveal', (_event, target: string) => {
+    const resolved = path.resolve(target); if (!allowedShellPaths.has(resolved)) throw new Error('未授权的文件路径'); shell.showItemInFolder(resolved);
+  });
+  ipcMain.handle('shell:open', async (_event, target: string) => {
+    const resolved = path.resolve(target); if (!allowedShellPaths.has(resolved)) throw new Error('未授权的文件路径'); await shell.openPath(resolved);
+  });
   createWindow();
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });

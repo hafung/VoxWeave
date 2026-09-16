@@ -1,0 +1,41 @@
+.library-button em {
+  font-style: normal;
+}
+
+.preview-heading {
+  height: 58px;
+}
+
+@media (max-width: 760px) {
+  .topbar {
+    padding-inline: 14px;
+  }
+
+  .brand small {
+    display: none;
+  }
+
+  .script-field textarea {
+    font-size: 16px;
+  }
+
+  .source-card {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .secondary-button {
+    width: 100%;
+    height: 44px;
+    justify-content: center;
+  }
+
+  .library-button {
+    min-width: 52px;
+    padding-inline: 8px;
+  }
+
+  .library-button em {
+    display: none;
+  }
+}

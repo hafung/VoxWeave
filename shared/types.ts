@@ -45,16 +45,42 @@ export interface ProgressEvent {
   outputPath?: string;
 }
 
+export type CompositionPhase = 'drafting' | 'narrating' | 'resolving' | 'aligning' | 'selecting' | 'compiling' | 'complete' | 'cancelled' | 'error';
+
+export interface CompositionProgressEvent {
+  jobId: string;
+  phase: CompositionPhase;
+  progress: number;
+  message: string;
+  plan?: EditPlan;
+  preview?: { entryUrl: string; durationMs: number; width: number; height: number };
+  recoverable?: boolean;
+}
+
+export interface GenerateCompositionRequest extends DraftPlanRequest {
+  language?: Language;
+  temperature?: number;
+  precision?: SynthesisRequest['precision'];
+}
+
 export interface VoxWeaveApi {
   getStatus(): Promise<EngineStatus>;
   configure(config: { enginePath?: string; modelDir?: string }): Promise<EngineStatus>;
   chooseFile(kind: 'audio' | 'video' | 'engine' | 'model'): Promise<string | null>;
   chooseOutput(defaultName: string, format?: AudioFormat): Promise<string | null>;
   createDraftPlan(request: DraftPlanRequest): Promise<EditPlan>;
+  generateComposition(request: GenerateCompositionRequest): Promise<{ jobId: string; projectId: string }>;
+  cancelComposition(jobId: string): Promise<void>;
+  resumeLastProject(): Promise<{ plan: EditPlan; preview?: CompositionProgressEvent['preview'] } | null>;
+  replaceScene(projectId: string, sceneId: string): Promise<{ plan: EditPlan; preview: NonNullable<CompositionProgressEvent['preview']> }>;
+  importAssets(): Promise<MediaAsset[]>;
+  listAssets(): Promise<MediaAsset[]>;
   synthesize(request: SynthesisRequest): Promise<{ jobId: string }>;
   cancel(jobId: string): Promise<void>;
   reveal(path: string): Promise<void>;
   openPath(path: string): Promise<void>;
   onProgress(listener: (event: ProgressEvent & { jobId: string }) => void): () => void;
+  onCompositionProgress(listener: (event: CompositionProgressEvent) => void): () => void;
 }
 import type { DraftPlanRequest, EditPlan } from './edit-plan.js';
+import type { MediaAsset } from './library.js';

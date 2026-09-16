@@ -1,0 +1,29 @@
+VoxWeave Qwen3-TTS Windows engine — third-party notices
+========================================================
+
+This directory contains a native Windows x64 build of qwen3-tts-c. The
+following components are distributed with, or compiled into, the engine:
+
+- qwen3-tts-c, MIT License. Copyright (c) 2025 Gabriele Mastrapasqua.
+  Full text: QWEN3-TTS-C-LICENSE.
+- ingot, MIT License. Copyright (c) 2026 Gabriele Mastrapasqua.
+  Full text: INGOT-LICENSE.
+- OpenBLAS 0.3.34, BSD 3-Clause License. The dynamically linked binary is
+  libopenblas.dll. Full text: OPENBLAS-LICENSE.
+- winpthreads from mingw-w64/LLVM-MinGW 20260908, MIT and BSD 3-Clause terms.
+  The dynamically linked binary is libwinpthread-1.dll. Full text:
+  WINPTHREADS-LICENSE.
+- LZ4 1.10.0, BSD 2-Clause License. LZ4 is compiled into qwen_tts.exe.
+  Full text: LZ4-LICENSE.
+
+Build-only toolchain: LLVM-MinGW 20260908 with LLVM 23.1.1, UCRT target.
+The compiler toolchain itself is not included in the portable application.
+Windows UCRT and Kernel32 are operating-system components and are not copied
+into this directory.
+
+Upstream sources:
+- https://github.com/gabriele-mastrapasqua/qwen3-tts
+- https://github.com/mynah-org/ingot
+- https://github.com/OpenMathLib/OpenBLAS/tree/v0.3.34
+- https://github.com/mstorsjo/llvm-mingw/tree/20260908
+- https://github.com/lz4/lz4/tree/v1.10.0

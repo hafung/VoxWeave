@@ -13,7 +13,7 @@
 
 声织 VoxWeave 是为视频博主、播客、知识区作者、教育工作者和开发者打造的本地语音工作台。它把专注好用的桌面创作界面、可自动化的 CLI 与 Qwen3-TTS 0.6B 原生 C 推理引擎组合在一起。
 
-未发布的选题、口播文案、参考音色和生成结果都留在你的电脑里。Windows 完整版安装后可彻底断网使用，不需要 Python、WSL、单独下载模型，也不要求 NVIDIA 显卡。
+未发布的选题、口播文案、参考音色和生成结果都留在你的电脑里。Windows 完整离线发行包的目标是不需要 Python、WSL、单独下载模型或 NVIDIA 显卡；当前源码版仍在完成 Windows 原生引擎与真实样片验证。
 
 > **当前版本：** v0.2.1，支持 Windows x64。macOS 与 Linux 安装包在路线图中；应用层已经采用可跨平台的 Electron、React、TypeScript 与 C 技术栈。
 
@@ -21,7 +21,7 @@
 
 - **敏感文案不出本机。** 未发布脚本和真人音色无需交给第三方云服务，降低内容泄露与素材滥用风险。
 - **普通电脑也能做 AI 配音。** 支持 CPU 推理与 INT8/INT4 模式，没有独立显卡也能建立自己的本地语音工作流。
-- **下载后直接创作。** Windows 完整版已经装好模型、原生引擎、OpenBLAS 和 FFmpeg，不用和 Python 环境、CUDA 版本反复搏斗。
+- **下载后直接创作。** 完整离线发行包会带齐模型、原生引擎依赖和 FFmpeg，不用在客户机器上处理 Python、CUDA 或模型下载。
 - **不是“生成完再凑合剪”。** 用 `[pause:500ms]` 写入精确停顿，复用克隆音色，并可调温度、Top-k、Top-p、随机种子和线程数。
 - **真正进入生产流程。** GUI 可快速试听与导出，CLI 可做批量旁白；支持 WAV、FLAC、MP3、Ogg/Opus、M4A/AAC。
 - **长任务也不拖死界面。** 推理运行在隔离的原生子进程中，模型加载、任务取消与异常不会把编辑器一起卡住。
@@ -42,9 +42,11 @@
 前往 [GitHub Releases](https://github.com/hafung/VoxWeave/releases/latest) 下载最新版：
 
 - **Setup 安装版（推荐）：** 只在安装时展开一次资源，日常启动更快。
-- **Portable 单文件版：** 最方便携带，但每次启动都要展开约 2GB 的应用、引擎和模型，因此冷启动明显更慢。
+- **Portable 目录版：** 下载 ZIP 后解压，模型、引擎和 FFmpeg 作为独立资源文件保留在目录中，双击应用即可启动。
 
-安装完成后，合成过程完全离线；无需账号、API Key、Python、WSL 或由管理员配置运行环境。设置页仍提供引擎和模型覆盖入口，方便开发者测试自定义版本。
+本地构建产物可直接双击解压目录中的 `VoxWeave.exe`；不要在 ZIP 内直接运行。
+
+当前目录发行包已通过本机打包后 EXE 样片；正式发布前仍需完成客户干净机验收。客户侧不需要 Node.js、账号、API Key、Python、WSL 或另行下载模型。设置页仍提供引擎和模型覆盖入口，方便开发者测试自定义版本。
 
 ## 命令行
 
@@ -76,6 +78,19 @@ pnpm test
 pnpm build
 ```
 
+在可联网的 Windows 构建机上先一次性准备外部资源，再生成目录便携包：
+
+```powershell
+.\scripts\download-model.ps1 -Variant custom-0.6b
+.\scripts\download-model.ps1 -Variant base-0.6b
+.\scripts\setup-sensevoice.ps1
+.\scripts\setup-ffmpeg.ps1
+pnpm verify:resources
+pnpm package:win
+```
+
+`package:win` 生成 `release\VoxWeave-Portable-<version>-<arch>.zip`；`package:win:installer` 会额外请求 NSIS Setup。两者都会先严格校验模型、原生 Qwen 引擎、依赖 DLL、FFmpeg 和许可证闭包。
+
 开发 CLI 时，需要指定兼容的引擎、模型和 FFmpeg：
 
 ```powershell
@@ -85,7 +100,7 @@ $env:VOXWEAVE_FFMPEG='C:\path\to\ffmpeg.exe'
 pnpm cli --text '你好，欢迎使用声织。' --output .\hello.wav --language Chinese
 ```
 
-Windows 安装包包含完整运行时，但源码 Git 仓库不会收录数 GB 的模型权重与可再发行二进制。准备开发环境时，请参考仓库脚本及上游引擎文档。
+数 GB 的模型权重与可再发行二进制不会进入 Git。准备发行资源时由仓库脚本下载到 `resources`，严格打包脚本会在任何必需运行时缺失时拒绝生成离线包。
 
 ## 架构与跨平台方向
 

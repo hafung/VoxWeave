@@ -239,20 +239,28 @@ Player 可以先行用于 composition 预览；浏览器资源闭包和黄金样
 
 ### M1：文案到可预览 composition
 
-- [ ] 极简创建页；
-- [ ] TTS 分段产物和真实时长；
-- [ ] draft → resolved plan；
-- [ ] jieba 初始字幕分组；
-- [ ] 静态图片/动态图形模板；
-- [ ] HyperFrames Player 预览。
+- [x] 极简创建页；
+- [x] TTS 分段产物和真实时长；
+- [x] draft → resolved plan；
+- [x] jieba 初始字幕分组；
+- [x] 静态图片/动态图形模板；
+- [x] HyperFrames Player 预览集成；
+- [x] Windows x64 Electron 44 实机启动冒烟。
 
 ### M2：SenseVoice 与素材库
 
-- [ ] SenseVoice INT8 + Silero VAD 资源闭包；
-- [ ] token/原文对齐；
-- [ ] SQLite/FTS5；
-- [ ] 素材导入、缩略图和标签；
-- [ ] B-roll 自动选择和单分镜替换。
+- [x] SenseVoice INT8 + Silero VAD 资源闭包（固定模型、完整许可证、SHA-256 manifest 与 Windows 原生推理冒烟）；
+- [x] token/原文对齐；
+- [x] SQLite/FTS5；
+- [x] 素材导入、缩略图和标签；
+- [x] B-roll 自动选择和单分镜替换。
+
+### R1：Windows 离线发行闭包
+
+- [x] 原生 `qwen_tts.exe`、OpenBLAS/winpthreads DLL、许可证与可复现构建信息；
+- [x] Windows `--self-test`、`--caps`、UTF-8 中文最短旁白；
+- [x] 打包后 TTS → SenseVoice/Silero → HyperFrames Player 实机样片；
+- [x] 模型独立存放的目录 Portable 包与 ZIP/SHA-256。
 
 ### M3：稳定渲染
 
@@ -264,7 +272,15 @@ Player 可以先行用于 composition 预览；浏览器资源闭包和黄金样
 
 ## 11. 当前进度
 
-已完成从“语音工作室”向“极简自动成片”的第一批底座：EditPlan v1、文案分镜草稿、jieba 关键词、版本化项目存储、renderer-neutral 接口和创建草稿 IPC。当前 UI 和实际渲染仍沿用/停留在原语音能力；下一个纵向切片是“文案 → TTS → resolved plan → 固定模板预览”。
+截至 2026-09-16，M1 的代码纵向切片已经完成：极简创建页可提交文案和可选原视频，composition job 会保存 draft、按分镜生成带稳定缓存键的 WAV、探测真实时长、生成连续覆盖旁白的 resolved 新修订，并编译只引用本地 GSAP/HyperFrames runtime 的固定模板。预览通过受控 `voxweave-preview://` 协议和 sandboxed HyperFrames Player 加载，支持播放、暂停、seek、阶段进度、取消、错误后重新生成、重启恢复和分镜卡片换画面。动态图形与字幕使用独立 composition/GSAP 时间线，Windows 冒烟同时断言 Player ready、scene 数、播放后时间和预览区域非黑像素比例。启动恢复与新任务并发时的旧预览覆盖竞态也已消除。原视频短于旁白时会在精确出点后切换为 kinetic-text 兜底。
+
+M2 已完成：SenseVoiceSmall INT8、Silero VAD 和 FFmpeg/ffprobe 已下载到外部 `resources` 目录，下载脚本锁定来源版本并校验 SHA-256；SenseVoice 的发行包许可证指针、固定 revision 的 FunASR Model Open Source License Agreement v1.1 和 Silero MIT 文本均随资源保存并参与哈希校验。适配器、16 kHz VAD、识别 token 到已知原文的动态规划对齐、jieba 词组回聚合、Node SQLite/FTS5 索引、SHA-256 去重、ffprobe 元数据、FFmpeg 缩略图、文件名/人工标签、可解释检索评分、授权和重复惩罚、自动 B-roll 与不可变单分镜替换均已接入。资源缺失时流水线仍明确降级到 TTS 估时字幕，不丢失 resolved 工程。
+
+兼容性记录：`@hyperframes/core`、`@hyperframes/player`、`@hyperframes/producer` 固定为 `0.8.38`，`gsap` 固定为 `3.14.2`，`puppeteer`/`puppeteer-core` 固定为 `25.10.0`。composition 编译时从已安装包复制 runtime 和 GSAP，不依赖 CDN；Manrope 与 Noto Sans SC 字体已进入 Vite 构建产物。Player 0.8.38 的跨源 iframe 会出现 ready/load 先后竞态，冒烟必须等待目标 `src` 对应的新 Player；模板不能给框架管理的 clip 写死 `opacity:0`。Windows 宿主使用 `C:\Users\admin\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe`（Node v24.19.0）完成原生生产构建和 Electron 启动；Electron 44.3.0 / Chromium 152.0.7977.78 / x64 冒烟通过。`sherpa-onnx-node` 1.13.8 在同一 Windows x64 环境加载真实 SenseVoice/Silero 资源成功；为规避 Electron 退出时第三方原生 addon 崩溃，对齐改在 `ELECTRON_RUN_AS_NODE` 隔离子进程中执行。固定的 FFmpeg `n8.1.2-52-g5a03dfa0f6` 与 ffprobe 也已在 Windows 运行。
+
+验证边界必须继续区分：原生 Qwen 引擎使用 LLVM-MinGW 20260908 / LLVM 23.1.1、OpenBLAS 0.3.34、LZ4 1.10.0 构建为 UCRT x64/AVX2+FMA 目标，`--self-test`、`--caps` 和 UTF-8 `你好。` 实际合成均已在 Windows 通过；该 1.36 秒、24 kHz 单声道 WAV 随后由 SenseVoice/Silero 对齐并进入 Player。Qwen CustomVoice revision `85e237c12c027371202489a0ec509ded67b5e4b5` 是默认预设音色模型，Base 模型用于克隆，两者仍是目录内的外部文件，不进入 Git 或单个 EXE。开发态和打包后 EXE 的完整 TTS → SenseVoice → Player 样片都已通过；Producer 最终 MP4 渲染仍未走通，也未进入默认路径。
+
+离线交付采用“目录 Portable ZIP”，不是把模型塞进单个 EXE：应用、`resources/models`、`resources/engine`、`resources/ffmpeg` 并列保存。严格资源校验通过，共 54 个文件、5,571,818,489 字节；引擎 manifest 同时锁定源码 commit/diff/tree hash、导入 DLL 和各许可证。当前本地发行物为 `release/VoxWeave-Portable-0.2.1-x64/`（约 5.8 GiB）及同名 ZIP（约 4.4 GiB），顶层入口固定为跨区域兼容的 `VoxWeave.exe`，ZIP SHA-256 为 `70f018f3a20774486f16b818ba46bbd735ad98888ad49b9cdc3a0750828f2f14`。打包后 EXE 已在本宿主机不经 Node.js 完成 1.36 秒中文样片和可见画面断言；真正客户干净机仍需人工验收。Producer 所需的 Chrome for Testing 属于 M0/M3 最终渲染闭包，不与 Electron 自带 Chromium 的预览启动混为一谈。
 
 每次实现应同时更新里程碑勾选项和关键兼容性记录，避免文档成为一次性设计稿。
 
@@ -272,59 +288,49 @@ Player 可以先行用于 composition 预览；浏览器资源闭包和黄金样
 
 ### 12.1 目标
 
-完成第一个真正可操作的 M1 纵向切片：用户只输入文案，选择性提供一个原始视频，即可生成旁白、带时间的字幕与可播放的固定模板预览，并把结果保存为 `resolved` EditPlan。
-
-本迭代暂不追求素材库自动检索、SenseVoice 精确对齐、复杂 B-roll 推荐和最终 MP4 导出。字幕先使用 TTS 分段真实时长加 jieba 权重估时，后续再由 SenseVoice 替换时间来源，保持 EditPlan 和 UI 不变。
+完成 M0 最后一个未完成项：为 HyperFrames Producer 建立固定版本、可校验、可随 Windows 离线包分发的浏览器资源闭包，并从现有 `PreparedComposition` 渲染一条最短 MP4。此批只证明 renderer 边界和短样片可工作，不同时扩展 BGM、硬件编码或完整黄金样片矩阵。
 
 ### 12.2 实施顺序
 
-1. **旁白产物服务化**
-   - 抽取现有 TTS 调用为 composition service；
-   - 按语义段生成或复用 WAV，拼接后使用 ffprobe 获取真实总时长；
-   - 为产物生成稳定缓存键，并支持取消与进度回调。
-2. **实现 draft → resolved resolver**
-   - 根据真实旁白时长重新计算连续分镜区间；
-   - 使用 jieba 生成词/词组字幕，并将时间来源标记为 `estimated`；
-   - 有原始视频时生成受控裁切段，无原视频时生成 kinetic-text 占位画面；
-   - 通过 `EditPlanSchema` 校验后写入新 revision，不覆盖旧修订。
-3. **固定模板 composition 编译器**
-   - 首个模板只支持背景、原视频/纯色画面、标题与逐词高亮字幕；
-   - 转义全部文案，不执行用户或模型提供的 JavaScript；
-   - composition 是临时编译产物，不能反向成为业务数据源。
-4. **HyperFrames Player 预览**
-   - 使用受控本地资源协议加载音频和视频；
-   - 支持播放、暂停、seek，并保证画面与同一时间轴字幕同步；
-   - Player 加载失败时显示可重试错误，不丢失已生成工程。
-5. **极简创建页**
-   - 默认只展示文案、可选原始视频和“生成视频”主按钮；
-   - 音色、比例、字幕样式收进“更多设置”；
-   - 展示生成阶段、进度、取消、错误恢复和预览，不提供传统时间线。
-6. **验证和文档回写**
-   - 增加 resolver、字幕估时、模板转义和 IPC 集成测试；
-   - 使用无原视频与有原视频两条最短样例走通预览；
-   - 运行 `pnpm typecheck`、`pnpm test`、`pnpm build`；
-   - 在 Windows 上完成 Electron 44 启动检查，并更新本文件勾选项。
+1. **冻结浏览器资源**
+   - 选择与 Puppeteer 25.10.0 兼容的 Chrome for Testing/Headless Shell x64 版本；
+   - 固定官方下载 URL、版本、SHA-256、许可证和目录布局，不依赖 Puppeteer 安装脚本隐式下载。
+2. **实现 Producer adapter**
+   - 在 `VideoRenderer` 边界内接入 `@hyperframes/producer@0.8.38`；
+   - 只接受已验证的 `PreparedComposition`、目标文件和渲染参数，显式传入 `chromePath`；
+   - 把进度、取消、子进程退出和错误统一映射回现有 composition job。
+3. **最短 MP4 样片**
+   - 使用现有本地 kinetic-text、旁白和字幕 composition 渲染 1–3 秒 MP4；
+   - 用 ffprobe 断言时长、尺寸、视频轨、音频轨和编码，不只检查文件存在。
+4. **离线打包闭包**
+   - 将浏览器资源加入严格 verifier、分项 manifest、许可证和 electron-builder `extraResources`；
+   - 从打包后 EXE 触发一次短渲染，确认没有回退到系统 Chrome 或联网下载。
+5. **测试与文档**
+   - 增加 adapter 参数校验、取消和错误路径测试；
+   - 运行 `pnpm typecheck`、`pnpm test`、`pnpm build`，更新第 10–12 节。
 
 ### 12.3 完成标准
 
-- 文案为空或输入非法时，在进入 TTS 前返回明确错误；
-- 不提供原视频也能生成完整预览；
-- 提供原视频时能作为首选视觉源播放，时长不足部分由受控占位画面覆盖；
-- resolved plan 从 `0ms` 连续覆盖到真实旁白末尾，字幕不越界；
-- 关闭并重启应用后可以重新读取该 EditPlan；
-- 取消任务不会遗留运行中的 TTS/媒体子进程；
-- renderer 进程不能传入任意命令、脚本或未验证输出路径；
+- 浏览器二进制、许可证和 SHA-256 都有固定 manifest，断网机器不触发下载；
+- Producer adapter 不绕过 `VideoRenderer`，也不接受任意 shell 参数；
+- 1–3 秒样片在开发态和打包后 EXE 中均能完成，ffprobe 结构断言通过；
+- 取消和失败不会遗留 Chrome/FFmpeg 子进程或半成品目标文件；
+- 此批完成后只勾选 M0 浏览器资源闭包，不提前宣称 M3 稳定渲染完成；
 - 类型检查、自动测试和生产构建全部通过。
 
 ### 12.4 推荐拆分
 
-为了让每次变更可审查，建议分为三个连续开发批次：
+为了让每次变更可审查，按以下连续开发批次推进：
 
-1. **M1-A：** TTS composition service、真实时长、resolver 与单元测试；
-2. **M1-B：** 固定模板编译器、HyperFrames Player 与预览集成；
-3. **M1-C：** 极简创建页、进度/取消/恢复和 Windows 冒烟测试。
+1. **M1-A（已完成）：** TTS composition service、真实时长、resolver 与单元测试；
+2. **M1-B（已完成）：** 固定模板编译器、HyperFrames Player 与预览集成；
+3. **M1-C（已完成）：** 极简创建页、进度/取消/恢复已完成；Linux Xvfb 与 Windows x64 Electron 44 启动冒烟均已通过。
+4. **M2 离线资源闭包（已完成）：** SenseVoiceSmall INT8、Silero VAD、FFmpeg/ffprobe、字体、版本清单和许可证已落盘；Windows 原生 ASR/VAD 与媒体探测已用真实资源验证。
+5. **R1-A Windows 离线发行闭包（已完成）：** 原生 `qwen_tts.exe`、依赖 DLL、许可证和可复现构建信息已闭包；`--self-test`、`--caps`、UTF-8 中文旁白、TTS → SenseVoice → Player、打包后 EXE 和目录 Portable ZIP 均已在 Windows 实机通过。Qwen CustomVoice 是默认预设音色模型，Base 模型用于克隆，两者均为独立资源文件。
 
-除非实现时发现协议缺口，否则不要在 M1-A 中同时引入 SQLite 素材库、SenseVoice 模型或 Producer 最终渲染，避免纵向切片失控。
+第一个未完成批次现在是 M0 的 Producer 浏览器资源闭包与短样片渲染；完成后继续 M3 的最终 MP4 稳定化。
+
+下一批只处理 Producer 浏览器闭包与最短 MP4；BGM、硬件编码和完整黄金样片留在 M3，避免范围失控。
 
 ## 13. AI 接棒约定
 
@@ -341,3 +347,7 @@ Player 可以先行用于 composition 预览；浏览器资源闭包和黄金样
 - 记录新增的版本锁定、资源闭包或兼容性问题；
 - 执行并汇报 `pnpm typecheck`、`pnpm test`、`pnpm build`；
 - 清楚区分“依赖已安装”“预览已走通”和“最终渲染已走通”。
+
+可直接把下面这段交给下一次 AI：
+
+> 继续开发 VoxWeave。先完整阅读 `docs/product-spec.zh-CN.md`、`docs/development.zh-CN.md` 第 10–13 节、`shared/edit-plan.ts`、`electron/composition/`、`electron/renderers/renderer.ts`，并检查当前 `git status`。从第 12.4 节第一个未完成批次继续，本次完成 M0 的 Producer 浏览器资源闭包与 1–3 秒短 MP4，不要只输出方案。完成后更新开发文档，并运行 `pnpm typecheck`、`pnpm test`、`pnpm build`，汇报验证结果、剩余风险和下一个未完成批次。

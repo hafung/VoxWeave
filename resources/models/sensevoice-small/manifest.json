@@ -1,0 +1,34 @@
+{
+    "version":  "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17",
+    "source":  "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2",
+    "license":  "FunASR Model Open Source License Agreement v1.1 plus MIT-licensed Silero VAD; see bundled notices",
+    "files":  {
+                  "model":  {
+                                "path":  "model.int8.onnx",
+                                "sha256":  "c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51"
+                            },
+                  "tokens":  {
+                                 "path":  "tokens.txt",
+                                 "sha256":  "f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc"
+                             },
+                  "sileroVad":  {
+                                    "path":  "silero_vad.onnx",
+                                    "sha256":  "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6"
+                                }
+              },
+    "notices":  {
+                    "modelPackage":  {
+                                         "path":  "SENSEVOICE-LICENSE",
+                                         "sha256":  "221c6df10b0931a5629adad671ea48fb7747e034c414b6d2bfa275bc3dd4ea17"
+                                     },
+                    "modelTerms":  {
+                                       "path":  "SENSEVOICE-MODEL-LICENSE",
+                                       "sha256":  "7dba975a2069691db4992b0592d70828b330d2f8a30a71450f4e152a554e84f8",
+                                       "revision":  "486b4b7ceb27b72db24a84c6e1be7cf6c5be6609"
+                                   },
+                    "sileroVad":  {
+                                      "path":  "SILERO-LICENSE",
+                                      "sha256":  "2e63e9a38b6e8fc0c7bc37ce174caca1862870856c6daf5697cfb785e925520b"
+                                  }
+                }
+}

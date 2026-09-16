@@ -10,7 +10,7 @@ export const CanvasSchema = z.object({
   width: z.number().int().positive(),
   height: z.number().int().positive(),
   fps: z.number().positive().max(120),
-  background: z.string().default('#0c0d10')
+  background: z.string().regex(/^#[0-9a-fA-F]{6}$/u).default('#0c0d10')
 }).strict();
 
 export const AcousticTokenSchema = z.object({

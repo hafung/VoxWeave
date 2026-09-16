@@ -1,0 +1,92 @@
+{
+    "version":  "qwen3-tts-c-v0.2.1",
+    "source":  "https://github.com/gabriele-mastrapasqua/qwen3-tts",
+    "sourceCommit":  "2a8948b18a600098c2d5f9e87dd10990749b2dc8",
+    "sourceDiffSha256":  "531e0e2a95b96f5cab4d71d87ad8ad303692410cb08248bee0915195456f8eb0",
+    "sourceTreeSha256":  "d64a48864ad6cc4e18e3c3737811b30bd0f8945a5d279221ba592cad07408a5d",
+    "target":  "x86_64-w64-windows-gnu-ucrt",
+    "cpuBaseline":  "AVX2+FMA",
+    "compiler":  "LLVM-MinGW 20260908 / LLVM 23.1.1",
+    "dependencies":  {
+                         "openblas":  "0.3.34",
+                         "lz4":  "1.10.0"
+                     },
+    "imports":  [
+                    "libopenblas.dll",
+                    "libwinpthread-1.dll",
+                    "api-ms-win-crt-stdio-l1-1-0.dll",
+                    "api-ms-win-crt-heap-l1-1-0.dll",
+                    "api-ms-win-crt-runtime-l1-1-0.dll",
+                    "api-ms-win-crt-environment-l1-1-0.dll",
+                    "api-ms-win-crt-string-l1-1-0.dll",
+                    "api-ms-win-crt-locale-l1-1-0.dll",
+                    "api-ms-win-crt-time-l1-1-0.dll",
+                    "api-ms-win-crt-convert-l1-1-0.dll",
+                    "api-ms-win-crt-math-l1-1-0.dll",
+                    "api-ms-win-crt-private-l1-1-0.dll",
+                    "api-ms-win-crt-utility-l1-1-0.dll",
+                    "api-ms-win-crt-filesystem-l1-1-0.dll",
+                    "KERNEL32.dll"
+                ],
+    "validation":  [
+                       "--self-test",
+                       "--caps"
+                   ],
+    "files":  [
+                  {
+                      "path":  "build-info.json",
+                      "size":  949,
+                      "sha256":  "8cc03858cf71edfede75cf7239831b1dfc8e808ae9456d7d73dd01b7f3c485d9"
+                  },
+                  {
+                      "path":  "INGOT-LICENSE",
+                      "size":  1099,
+                      "sha256":  "37a7836f0d6312676afe817277353a39180e98a25bb1ac86e4de7103c42c7d4b"
+                  },
+                  {
+                      "path":  "libopenblas.dll",
+                      "size":  51379251,
+                      "sha256":  "0486735c359a67419d8832e3c40e2837f8762baebcdf4b62d3b18c91f9ece12e"
+                  },
+                  {
+                      "path":  "libwinpthread-1.dll",
+                      "size":  270336,
+                      "sha256":  "755754ea51c3c5f269916014645a94a14198ef46b3125987bc78fa4f768b424e"
+                  },
+                  {
+                      "path":  "LZ4-LICENSE",
+                      "size":  1311,
+                      "sha256":  "8b58c446121a109ccf32edc094bba3010a3d85e4ee3702950db55e4d3e87736c"
+                  },
+                  {
+                      "path":  "OPENBLAS-LICENSE",
+                      "size":  1548,
+                      "sha256":  "190b5a9c8d9723fe958ad33916bd7346d96fab3c5ea90832bb02d854f620fcff"
+                  },
+                  {
+                      "path":  "qwen_tts.exe",
+                      "size":  1152000,
+                      "sha256":  "a122f679e6925e384d4581cd1eeaed08bef4c0af9bda21e4aa3678b8c8129fad"
+                  },
+                  {
+                      "path":  "QWEN3-TTS-C-LICENSE",
+                      "size":  1099,
+                      "sha256":  "1b64a0bf2bf561d10305b9d223e13370290419192ad5ab9a0cbf76aec5fcfec8"
+                  },
+                  {
+                      "path":  "README.md",
+                      "size":  600,
+                      "sha256":  "5dd895bb8c709730c9f93f70e622baae9b60599fa9826f94b0f4544fa8330d04"
+                  },
+                  {
+                      "path":  "THIRD-PARTY-NOTICES.txt",
+                      "size":  1352,
+                      "sha256":  "9b34c25f8d0f9ae60de63e53337b0d6dbaa375b8b04a70c92071f7c6bb02e005"
+                  },
+                  {
+                      "path":  "WINPTHREADS-LICENSE",
+                      "size":  2883,
+                      "sha256":  "63263614cdd29f2f93cba85e992f041b31f9fc7b4033692f31269489a8a1b177"
+                  }
+              ]
+}

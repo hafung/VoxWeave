@@ -907,7 +907,7 @@ static int apply_expr_file(qwen_tts_ctx_t *ctx, const char *path, float expr_wei
     return loaded > 0 ? 0 : -1;
 }
 
-int main(int argc, char **argv) {
+static int qwen_main(int argc, char **argv) {
     const char *model_dir = NULL;
     const char *text = NULL;
     const char *output = "output.wav";
@@ -3232,3 +3232,48 @@ int main(int argc, char **argv) {
     qwen_tts_unload(ctx);
     return 0;
 }
+
+#ifdef _WIN32
+/*
+ * MinGW's narrow main() converts the UTF-16 Windows command line through the
+ * process ANSI code page. That corrupts Chinese narration on machines whose
+ * locale is not UTF-8. Keep the engine's existing UTF-8 contract explicit by
+ * accepting UTF-16 argv and converting every argument ourselves.
+ */
+int wmain(int argc, wchar_t **wide_argv) {
+    char **argv = (char **)calloc((size_t)argc + 1, sizeof(*argv));
+    if (!argv) {
+        fprintf(stderr, "Out of memory while decoding the Windows command line\n");
+        return 1;
+    }
+
+    for (int i = 0; i < argc; i++) {
+        int size = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS,
+                                       wide_argv[i], -1, NULL, 0, NULL, NULL);
+        if (size <= 0) {
+            fprintf(stderr, "Invalid Unicode in Windows command-line argument %d\n", i);
+            for (int j = 0; j < i; j++) free(argv[j]);
+            free(argv);
+            return 1;
+        }
+        argv[i] = (char *)malloc((size_t)size);
+        if (!argv[i] || WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS,
+                                            wide_argv[i], -1, argv[i], size,
+                                            NULL, NULL) <= 0) {
+            fprintf(stderr, "Unable to convert Windows command-line argument %d to UTF-8\n", i);
+            for (int j = 0; j <= i; j++) free(argv[j]);
+            free(argv);
+            return 1;
+        }
+    }
+
+    int result = qwen_main(argc, argv);
+    for (int i = 0; i < argc; i++) free(argv[i]);
+    free(argv);
+    return result;
+}
+#else
+int main(int argc, char **argv) {
+    return qwen_main(argc, argv);
+}
+#endif

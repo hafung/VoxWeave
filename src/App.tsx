@@ -1,69 +1,126 @@
+import '@hyperframes/player';
+import type { HyperframesPlayer } from '@hyperframes/player';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, AudioLines, BookOpen, Check, ChevronDown, CircleHelp, Clock3, Download, FolderOpen, Gauge, Mic2, Pause, Play, Plus, Radio, Settings2, Sparkles, Square, Upload, WandSparkles, X, Zap } from 'lucide-react';
+import {
+  Activity, AudioLines, Check, ChevronDown, Film, FolderOpen, Image, Library,
+  Play, Plus, RefreshCw, Settings2, Sparkles, Square, Upload, Video, WandSparkles, X
+} from 'lucide-react';
 import { estimateDuration } from '../shared/markup';
-import { AUDIO_FORMATS, LANGUAGES, type AudioFormat, type EngineStatus, type Language, type ProgressEvent, type SynthesisRequest, type VoiceProfile } from '../shared/types';
-
-const PRESET_VOICES: VoiceProfile[] = [
-  { id: 'vivian', name: 'Vivian', kind: 'preset', language: 'Chinese' },
-  { id: 'serena', name: 'Serena', kind: 'preset', language: 'Chinese' },
-  { id: 'ryan', name: 'Ryan', kind: 'preset', language: 'English' },
-  { id: 'ono_anna', name: '小野安娜', kind: 'preset', language: 'Japanese' }
-];
+import type { EditPlan } from '../shared/edit-plan';
+import type { MediaAsset } from '../shared/library';
+import type { CompositionProgressEvent, EngineStatus, GenerateCompositionRequest } from '../shared/types';
 
 const api = () => window.voxweave;
+const voices = [
+  { id: 'vivian', name: 'Vivian', note: '中文女声 · 清晰自然' },
+  { id: 'serena', name: 'Serena', note: '中文女声 · 沉稳温暖' },
+  { id: 'ryan', name: 'Ryan', note: '英文男声 · 叙事感' }
+];
+const stages: Array<{ phase: CompositionProgressEvent['phase']; label: string }> = [
+  { phase: 'drafting', label: '分镜' }, { phase: 'narrating', label: '旁白' },
+  { phase: 'resolving', label: '时间轴' }, { phase: 'aligning', label: '字幕' },
+  { phase: 'selecting', label: '素材' }, { phase: 'compiling', label: '预览' }
+];
+
+type Preview = NonNullable<CompositionProgressEvent['preview']>;
 
 export function App() {
-  const [text, setText] = useState('欢迎来到声织。这里，每一个停顿都有分量，[pause:500ms] 每一种声音，都值得被认真表达。');
-  const [voice, setVoice] = useState<VoiceProfile>(PRESET_VOICES[0]);
-  const [language, setLanguage] = useState<Language>('Chinese');
-  const [temperature, setTemperature] = useState(0.5);
-  const [precision, setPrecision] = useState<SynthesisRequest['precision']>('int8');
-  const [outputFormat, setOutputFormat] = useState<AudioFormat>('wav');
-  const [referenceAudio, setReferenceAudio] = useState<string>();
-  const [referenceText, setReferenceText] = useState('');
-  const [progress, setProgress] = useState<ProgressEvent>();
-  const [jobId, setJobId] = useState<string>();
-  const [outputPath, setOutputPath] = useState<string>();
-  const [helpOpen, setHelpOpen] = useState(false);
+  const [script, setScript] = useState('产品很好，却一直卖不出去？问题也许不在产品，而在表达。让声织帮你把文案、旁白和画面，自动编成一条完整视频。');
+  const [voiceId, setVoiceId] = useState('vivian');
+  const [aspectRatio, setAspectRatio] = useState<NonNullable<GenerateCompositionRequest['aspectRatio']>>('9:16');
+  const [captionStyle, setCaptionStyle] = useState<NonNullable<GenerateCompositionRequest['captionStyle']>>('commerce-bold');
+  const [sourceVideoPath, setSourceVideoPath] = useState<string>();
+  const [moreOpen, setMoreOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [cloneOpen, setCloneOpen] = useState(false);
-  const [status, setStatus] = useState<EngineStatus>({ state: 'missing', backend: 'none', message: '正在检测引擎…' });
+  const [status, setStatus] = useState<EngineStatus>({ state: 'missing', backend: 'none', message: '正在检测本地引擎…' });
   const [enginePath, setEnginePath] = useState('');
   const [modelDir, setModelDir] = useState('');
-  const editorRef = useRef<HTMLTextAreaElement>(null);
+  const [jobId, setJobId] = useState<string>();
+  const jobRef = useRef<string | undefined>(undefined);
+  const [projectId, setProjectId] = useState<string>();
+  const [progress, setProgress] = useState<CompositionProgressEvent>();
+  const [plan, setPlan] = useState<EditPlan>();
+  const [preview, setPreview] = useState<Preview>();
+  const [previewError, setPreviewError] = useState<string>();
+  const [assets, setAssets] = useState<MediaAsset[]>([]);
+  const [replacingScene, setReplacingScene] = useState<string>();
+  const playerRef = useRef<HyperframesPlayer>(null);
 
   useEffect(() => {
-    void api()?.getStatus().then(result => { setStatus(result); setEnginePath(result.enginePath ?? ''); setModelDir(result.modelDir ?? ''); });
-    return api()?.onProgress(event => {
-      if (!jobId || event.jobId === jobId) {
-        setProgress(event);
-        if (event.outputPath) setOutputPath(event.outputPath);
-        if (event.phase === 'complete' || event.phase === 'error') setJobId(undefined);
+    const desktop = api();
+    if (!desktop) return;
+    let receivedCompositionProgress = false;
+    void desktop.getStatus().then(result => {
+      setStatus(result); setEnginePath(result.enginePath ?? ''); setModelDir(result.modelDir ?? '');
+    });
+    void desktop.listAssets().then(setAssets);
+    void desktop.resumeLastProject().then(last => {
+      if (!last || receivedCompositionProgress) return;
+      setPlan(last.plan); setProjectId(last.plan.id); setScript(last.plan.input.script);
+      setSourceVideoPath(last.plan.input.sourceVideoPath); setVoiceId(last.plan.narration.voiceId);
+      if (last.preview) setPreview(last.preview);
+    }).catch(() => undefined);
+    return desktop.onCompositionProgress(event => {
+      receivedCompositionProgress = true;
+      if (jobRef.current && event.jobId !== jobRef.current) return;
+      setProgress(event);
+      if (event.plan) setPlan(event.plan);
+      if (event.preview) { setPreview(event.preview); setPreviewError(undefined); }
+      if (event.phase === 'complete' || event.phase === 'error' || event.phase === 'cancelled') {
+        jobRef.current = undefined; setJobId(undefined);
       }
     });
-  }, [jobId]);
+  }, []);
 
-  const duration = useMemo(() => estimateDuration(text), [text]);
-  const working = !!jobId;
-  const insert = (value: string) => {
-    const field = editorRef.current;
-    if (!field) return setText(current => current + value);
-    const start = field.selectionStart; const end = field.selectionEnd;
-    setText(text.slice(0, start) + value + text.slice(end));
-    requestAnimationFrame(() => { field.focus(); field.setSelectionRange(start + value.length, start + value.length); });
-  };
+  useEffect(() => {
+    const player = playerRef.current;
+    if (!player) return;
+    const ready = () => setPreviewError(undefined);
+    const failed = (event: Event) => setPreviewError((event as CustomEvent<{ message?: string }>).detail?.message ?? '预览加载失败');
+    player.addEventListener('ready', ready); player.addEventListener('error', failed);
+    return () => { player.removeEventListener('ready', ready); player.removeEventListener('error', failed); };
+  }, [preview?.entryUrl]);
+
+  const estimatedSeconds = useMemo(() => estimateDuration(script), [script]);
+  const working = Boolean(jobId);
+  const activeStage = stages.findIndex(stage => stage.phase === progress?.phase);
 
   async function generate() {
-    if (!api()) { setProgress({ phase: 'error', message: '请在 VoxWeave 桌面应用中运行，而不是浏览器预览。' }); return; }
+    const desktop = api();
+    if (!desktop) {
+      setProgress({ jobId: 'browser', phase: 'error', progress: 0, message: '请在 VoxWeave 桌面应用中运行。', recoverable: true });
+      return;
+    }
     if (status.state === 'missing') { setSettingsOpen(true); return; }
-    const extension = outputFormat === 'opus' ? 'ogg' : outputFormat;
-    const target = await api()!.chooseOutput(`voxweave-${Date.now()}.${extension}`, outputFormat);
-    if (!target) return;
-    setOutputPath(undefined); setProgress({ phase: 'preparing', progress: 0, message: '任务已加入本地队列…' });
-    const result = await api()!.synthesize({ text, outputPath: target, outputFormat, language, speaker: voice.kind === 'preset' ? voice.id : undefined,
-      voicePath: voice.kind === 'clone' ? voice.path : undefined, referenceAudio, referenceText: referenceText || undefined,
-      temperature, topK: 50, topP: 1, threads: 4, precision });
-    setJobId(result.jobId);
+    setPreviewError(undefined); setPreview(undefined); setPlan(undefined);
+    setProgress({ jobId: 'pending', phase: 'drafting', progress: 0.01, message: '正在创建本地工程…' });
+    try {
+      const result = await desktop.generateComposition({ script, voiceId, aspectRatio, captionStyle, sourceVideoPath, language: voiceId === 'ryan' ? 'English' : 'Chinese', precision: 'int8' });
+      jobRef.current = result.jobId; setJobId(result.jobId); setProjectId(result.projectId);
+    } catch (error) {
+      setProgress({ jobId: 'failed', phase: 'error', progress: 0, message: error instanceof Error ? error.message : String(error), recoverable: true });
+    }
+  }
+
+  async function chooseSource() {
+    const selected = await api()?.chooseFile('video');
+    if (selected) setSourceVideoPath(selected);
+  }
+
+  async function importAssets() {
+    const imported = await api()?.importAssets();
+    if (imported?.length) setAssets(await api()!.listAssets());
+  }
+
+  async function replaceScene(sceneId: string) {
+    if (!projectId) return;
+    setReplacingScene(sceneId);
+    try {
+      const result = await api()?.replaceScene(projectId, sceneId);
+      if (result) { setPlan(result.plan); setPreview(result.preview); setPreviewError(undefined); }
+    } catch (error) {
+      setPreviewError(error instanceof Error ? error.message : String(error));
+    } finally { setReplacingScene(undefined); }
   }
 
   async function configure() {
@@ -72,76 +129,81 @@ export function App() {
   }
 
   return <div className="app-shell">
-    <header className="topbar drag-region" style={{ paddingRight: 166, gridTemplateColumns: '300px 1fr minmax(250px, 360px)' }}>
-      <div className="brand no-drag"><div className="brand-mark"><AudioLines size={20}/></div><span>声织</span><b>VoxWeave</b></div>
-      <nav className="workspace-tabs no-drag"><button className="active">创作台</button><button>音色库</button><button>历史记录</button></nav>
+    <header className="topbar drag-region">
+      <div className="brand no-drag"><span className="brand-mark"><AudioLines size={19}/></span><strong>声织</strong><small>VOXWEAVE</small></div>
       <div className="top-actions no-drag">
-        <button className="quiet-button" onClick={() => setHelpOpen(true)}><CircleHelp size={17}/> 使用指南</button>
-        <button className={`status-pill ${status.state}`} onClick={() => setSettingsOpen(true)}><i/>{status.state === 'idle' ? '本地引擎就绪' : '配置引擎'}</button>
-        <button className="icon-button" aria-label="设置" onClick={() => setSettingsOpen(true)}><Settings2 size={18}/></button>
+        <button className="library-button" aria-label={`素材库，${assets.length} 个素材`} onClick={importAssets}><Library size={16}/> <em>素材库</em> <span>{assets.length}</span></button>
+        <button className={`engine-pill ${status.state}`} onClick={() => setSettingsOpen(true)}><i/>{status.state === 'idle' ? '本地引擎就绪' : '配置引擎'}</button>
+        <button className="icon-button" aria-label="打开引擎设置" onClick={() => setSettingsOpen(true)}><Settings2 size={18}/></button>
       </div>
     </header>
 
-    <main className="workspace">
-      <aside className="voice-panel">
-        <div className="section-heading"><div><span className="eyebrow">VOICE LIBRARY</span><h2>选择音色</h2></div><button className="icon-button small" onClick={() => setCloneOpen(true)}><Plus size={17}/></button></div>
-        <button className="clone-callout" onClick={() => setCloneOpen(true)}><span className="clone-icon"><Mic2 size={19}/></span><span><b>克隆新音色</b><small>3–15 秒清晰人声即可</small></span><Sparkles size={17}/></button>
-        <div className="voice-list">
-          {PRESET_VOICES.map((item, index) => <button key={item.id} className={`voice-item ${voice.id === item.id ? 'selected' : ''}`} onClick={() => { setVoice(item); setLanguage(item.language ?? 'Auto'); }}>
-            <span className={`avatar tone-${index + 1}`}>{item.name.slice(0, 1)}</span><span className="voice-meta"><b>{item.name}</b><small>{item.language} · 内置音色</small></span>
-            <span className="mini-play"><Play size={13} fill="currentColor"/></span>{voice.id === item.id && <Check className="selected-check" size={14}/>}</button>)}
-        </div>
-        <div className="local-note"><Radio size={15}/><span><b>完全本地运行</b><small>音频与文本不会离开你的设备</small></span></div>
-      </aside>
+    <main className="creator-layout">
+      <section className="create-pane" aria-labelledby="create-title">
+        <div className="pane-heading"><span>AUTO COMPOSITION</span><h1 id="create-title">一段文案，自动成为一条片。</h1><p>旁白是真实时钟。字幕、画面和素材会跟着声音重新排好。</p></div>
 
-      <section className="studio">
-        <div className="studio-head"><div><span className="eyebrow">NEW COMPOSITION</span><h1>让文字，拥有自己的声音。</h1></div><div className="estimate"><Clock3 size={15}/><span>预计音频 <b>{duration || '—'} 秒</b></span></div></div>
-        <div className="editor-card">
-          <div className="editor-toolbar">
-            <div className="format-actions"><button onClick={() => insert('[pause:500ms]')}><Pause size={14}/> 停顿 <ChevronDown size={13}/></button><button onClick={() => insert('[laugh]')}><Sparkles size={14}/> 表演标签</button></div>
-            <div className="counter">{text.length.toLocaleString()} / 8,000</div>
-          </div>
-          <textarea ref={editorRef} value={text} maxLength={8000} onChange={e => setText(e.target.value)} spellCheck={false} placeholder="输入想要说的话…" />
-          <div className="editor-tip"><WandSparkles size={15}/><span>试试加入 <code>[pause:800ms]</code>、<code>[laugh]</code> 或 <code>[sigh]</code>，让表达更自然。</span><button onClick={() => setHelpOpen(true)}>查看技巧</button></div>
+        <label className="script-field">
+          <span>视频文案</span>
+          <textarea value={script} maxLength={8000} onChange={event => setScript(event.target.value)} placeholder="输入推广文案或观点内容…" disabled={working}/>
+          <small><b>约 {estimatedSeconds || '—'} 秒</b>{script.length.toLocaleString()} / 8,000</small>
+        </label>
+
+        <div className="source-card">
+          <div className="source-copy"><span className="source-icon"><Video size={18}/></span><div><b>原始视频</b><small>可选；不添加也能用素材与动效完成视频</small></div></div>
+          {sourceVideoPath ? <div className="source-selected"><span title={sourceVideoPath}>{sourceVideoPath.split(/[\\/]/u).at(-1)}</span><button aria-label="移除原始视频" onClick={() => setSourceVideoPath(undefined)} disabled={working}><X size={15}/></button></div>
+            : <button className="secondary-button" onClick={chooseSource} disabled={working}><Upload size={15}/> 添加视频</button>}
         </div>
 
-        <div className="controls-grid" style={{ gridTemplateColumns: 'repeat(4, minmax(0, 1fr))' }}>
-          <div className="control-card"><label>输出格式</label><div className="select-wrap"><select value={outputFormat} onChange={e => setOutputFormat(e.target.value as AudioFormat)}>{AUDIO_FORMATS.map(item => <option key={item} value={item}>{item === 'opus' ? 'OGG / OPUS' : item.toUpperCase()}</option>)}</select><ChevronDown size={15}/></div><small>{outputFormat === 'wav' || outputFormat === 'flac' ? '无损，适合后期制作' : '高质量压缩，适合分发'}</small></div>
-          <div className="control-card"><label>语言</label><div className="select-wrap"><select value={language} onChange={e => setLanguage(e.target.value as Language)}>{LANGUAGES.map(item => <option key={item}>{item}</option>)}</select><ChevronDown size={15}/></div><small>自动模式会依据文本判断</small></div>
-          <div className="control-card"><label>表现力 <span>{temperature.toFixed(2)}</span></label><input type="range" min="0.1" max="1.2" step="0.05" value={temperature} onChange={e => setTemperature(Number(e.target.value))}/><div className="range-ends"><span>稳定</span><span>灵动</span></div></div>
-          <div className="control-card"><label>推理精度</label><div className="segmented">{(['bf16','int8','int4'] as const).map(item => <button key={item} className={precision === item ? 'active' : ''} onClick={() => setPrecision(item)}>{item.toUpperCase()}</button>)}</div><small>{precision === 'int8' ? '速度与质量的最佳平衡' : precision === 'int4' ? '适合内存带宽受限的 x86 CPU' : '最高精度，占用更多内存'}</small></div>
+        <button className="more-toggle" aria-expanded={moreOpen} onClick={() => setMoreOpen(value => !value)}><Settings2 size={15}/> 更多设置 <ChevronDown size={15}/></button>
+        {moreOpen && <div className="settings-grid">
+          <label><span>音色</span><select value={voiceId} onChange={event => setVoiceId(event.target.value)}>{voices.map(voice => <option key={voice.id} value={voice.id}>{voice.name} · {voice.note}</option>)}</select></label>
+          <label><span>画幅</span><select value={aspectRatio} onChange={event => setAspectRatio(event.target.value as typeof aspectRatio)}><option>9:16</option><option>16:9</option><option>1:1</option></select></label>
+          <label><span>字幕风格</span><select value={captionStyle} onChange={event => setCaptionStyle(event.target.value as typeof captionStyle)}><option value="commerce-bold">电商强调</option><option value="opinion-clean">观点口播</option><option value="brand-minimal">品牌极简</option><option value="info-card">信息卡片</option></select></label>
+        </div>}
+
+        {progress && <div className={`job-status ${progress.phase}`} role="status" aria-live="polite">
+          <div className="status-line"><span className="status-symbol">{working ? <Activity size={18}/> : progress.phase === 'complete' ? <Check size={18}/> : progress.phase === 'error' ? <X size={18}/> : <Sparkles size={18}/>}</span><div><b>{progress.message}</b><small>{Math.round(progress.progress * 100)}% · 工程会随阶段自动保存</small></div></div>
+          <div className="progress-track"><span style={{ width: `${Math.max(2, progress.progress * 100)}%` }}/></div>
+          <ol className="stage-list">{stages.map((stage, index) => <li key={stage.phase} className={index < activeStage || progress.phase === 'complete' ? 'done' : index === activeStage ? 'active' : ''}>{stage.label}</li>)}</ol>
+        </div>}
+
+        <div className="primary-row">
+          {working && <button className="cancel-button" onClick={() => jobId && api()?.cancelComposition(jobId)}><Square size={14} fill="currentColor"/> 取消</button>}
+          <button className="generate-button" disabled={working || !script.trim()} onClick={generate}><WandSparkles size={18}/>{working ? '正在自动成片…' : progress?.phase === 'error' || progress?.phase === 'cancelled' ? '重新生成' : '生成视频'}</button>
         </div>
+      </section>
 
-        {referenceAudio && <div className="reference-strip"><Mic2 size={17}/><span><b>即时克隆</b><small>{referenceAudio}</small></span><button onClick={() => setReferenceAudio(undefined)}><X size={16}/></button></div>}
-
-        <div className={`result-dock ${progress ? 'visible' : ''}`}>
-          <div className="wave-orb">{working ? <Activity size={21}/> : progress?.phase === 'complete' ? <Check size={21}/> : <AudioLines size={21}/>}</div>
-          <div className="result-info"><b>{progress?.message ?? '准备就绪'}</b><div className="progress-track"><span style={{ width: `${Math.round((progress?.progress ?? 0) * 100)}%` }}/></div></div>
-          {working ? <button className="cancel-button" onClick={() => jobId && api()?.cancel(jobId)}><Square size={13} fill="currentColor"/> 停止</button> : outputPath ? <><button className="play-button" onClick={() => api()?.openPath(outputPath)}><Play size={15} fill="currentColor"/> 播放</button><button className="icon-button" onClick={() => api()?.reveal(outputPath)}><FolderOpen size={17}/></button></> : null}
+      <section className="preview-pane" aria-labelledby="preview-title">
+        <div className="preview-heading"><div><span>PREVIEW</span><h2 id="preview-title">成片预览</h2></div>{plan && <span className="revision">R{plan.revision} · {plan.scenes.length} 个分镜</span>}</div>
+        <div className={`preview-stage ${preview ? 'ready' : ''}`} style={preview ? { aspectRatio: `${preview.width}/${preview.height}` } : undefined}>
+          {preview ? <hyperframes-player key={preview.entryUrl} ref={playerRef} src={preview.entryUrl} width={preview.width} height={preview.height} controls/>
+            : <div className="empty-preview"><span><Film size={29}/></span><h3>{working ? '正在编织画面' : '等待第一条成片'}</h3><p>{working ? '旁白生成后，画面与字幕会出现在这里。' : '输入文案即可开始；原始视频不是必填项。'}</p></div>}
         </div>
+        {previewError && <div className="preview-error" role="alert"><span>{previewError}</span><button onClick={() => setPreview(value => value ? { ...value, entryUrl: `${value.entryUrl}?retry=${Date.now()}` } : value)}><RefreshCw size={14}/> 重试加载</button></div>}
 
-        <button className="generate-button" disabled={working || !text.trim()} onClick={generate}><Zap size={19} fill="currentColor"/>{working ? '正在编织声音…' : '生成声音'}<span>Ctrl ↵</span></button>
+        {plan && <div className="storyboard" aria-label="分镜列表">
+          <div className="storyboard-title"><span>分镜卡片</span><small>不满意时只换当前画面</small></div>
+          <div className="scene-list">{plan.scenes.map((scene, index) => <article key={scene.id} className="scene-card">
+            <span className="scene-number">{String(index + 1).padStart(2, '0')}</span>
+            <span className="scene-type">{scene.visual.type === 'kinetic-text' ? <Sparkles size={14}/> : scene.visual.type === 'image' ? <Image size={14}/> : <Video size={14}/>}</span>
+            <div><b>{scene.script}</b><small>{(scene.startMs / 1000).toFixed(1)}–{(scene.endMs / 1000).toFixed(1)}s · {scene.visual.type}</small></div>
+            <button onClick={() => replaceScene(scene.id)} disabled={Boolean(replacingScene)}>{replacingScene === scene.id ? <Activity size={14}/> : <RefreshCw size={14}/>} 换画面</button>
+          </article>)}</div>
+        </div>}
       </section>
     </main>
 
-    {helpOpen && <HelpModal close={() => setHelpOpen(false)} insert={value => { insert(value); setHelpOpen(false); }}/>} 
-    {settingsOpen && <Modal title="引擎设置" subtitle="连接 Qwen3-TTS 纯 C 推理后端" close={() => setSettingsOpen(false)}>
-      <div className="settings-form"><PathField label="引擎路径" value={enginePath} placeholder="qwen_tts.exe 或 WSL 路径" choose={async () => { const value = await api()?.chooseFile('engine'); if (value) setEnginePath(value); }}/><PathField label="0.6B 模型目录" value={modelDir} placeholder="qwen3-tts-0.6b-base" choose={async () => { const value = await api()?.chooseFile('model'); if (value) setModelDir(value); }}/>
-      <div className="engine-summary"><Gauge size={18}/><span><b>{status.message}</b><small>默认使用 INT8 + 4 线程；引擎会在独立进程中运行。</small></span></div><button className="primary-action" onClick={configure}>保存并检测</button></div>
-    </Modal>}
-    {cloneOpen && <Modal title="克隆你的音色" subtitle="推荐 3–15 秒、无噪声、单人说话的 PCM WAV" close={() => setCloneOpen(false)}>
-      <div className="clone-form"><button className="drop-zone" onClick={async () => { const value = await api()?.chooseFile('audio'); if (value) setReferenceAudio(value); }}><Upload size={25}/><b>{referenceAudio ? '已选择参考音频' : '选择参考 WAV'}</b><small>{referenceAudio ?? '单击浏览文件 · 建议 24 kHz 单声道'}</small></button><label>参考音频原文（可选）</label><textarea value={referenceText} onChange={e => setReferenceText(e.target.value)} placeholder="准确填写原文通常能获得更稳定的音色复刻。"/><button className="primary-action" disabled={!referenceAudio} onClick={() => { setVoice({ id: 'instant-clone', name: '即时克隆', kind: 'clone' }); setCloneOpen(false); }}>用于本次创作</button></div>
+    {settingsOpen && <Modal title="本地引擎设置" subtitle="自动成片的旁白由 Qwen3-TTS 在本机生成" close={() => setSettingsOpen(false)}>
+      <div className="settings-form"><PathField label="引擎路径" value={enginePath} placeholder="qwen_tts.exe 或 WSL 可执行文件" choose={async () => { const selected = await api()?.chooseFile('engine'); if (selected) setEnginePath(selected); }}/><PathField label="0.6B 模型目录" value={modelDir} placeholder="qwen3-tts-0.6b-base" choose={async () => { const selected = await api()?.chooseFile('model'); if (selected) setModelDir(selected); }}/>
+        <div className={`engine-summary ${status.state}`}><i/><span><b>{status.message}</b><small>文本与媒体只在本机处理。</small></span></div><button className="modal-primary" onClick={configure}>保存并检测</button></div>
     </Modal>}
   </div>;
 }
 
-function PathField({label,value,placeholder,choose}:{label:string;value:string;placeholder:string;choose:()=>void}) { return <label className="path-field"><span>{label}</span><div><input readOnly value={value} placeholder={placeholder}/><button onClick={choose}><FolderOpen size={16}/> 浏览</button></div></label>; }
+function PathField({ label, value, placeholder, choose }: { label: string; value: string; placeholder: string; choose: () => void }) {
+  return <label className="path-field"><span>{label}</span><div><input readOnly value={value} placeholder={placeholder}/><button onClick={choose}><FolderOpen size={15}/> 浏览</button></div></label>;
+}
 
-function Modal({ title, subtitle, close, children }: { title: string; subtitle: string; close: () => void; children: React.ReactNode }) { return <div className="modal-backdrop" onMouseDown={e => e.target === e.currentTarget && close()}><div className="modal"><div className="modal-head"><div><h2>{title}</h2><p>{subtitle}</p></div><button className="icon-button" onClick={close}><X size={18}/></button></div>{children}</div></div>; }
-
-function HelpModal({ close, insert }: { close: () => void; insert: (value: string) => void }) { return <div className="modal-backdrop" onMouseDown={e => e.target === e.currentTarget && close()}><div className="modal help-modal"><div className="modal-head"><div><span className="eyebrow">VOICE DIRECTION</span><h2>像导演一样控制声音</h2><p>少量、明确的标记通常比堆叠指令更自然。</p></div><button className="icon-button" onClick={close}><X size={18}/></button></div><div className="help-grid">
-    <section><div className="help-icon amber"><Pause size={19}/></div><h3>精确停顿</h3><p>声织会真正插入静音，不依赖模型猜测标点。</p><button onClick={() => insert('[pause:500ms]')}><code>[pause:500ms]</code><Plus size={14}/></button><button onClick={() => insert('<break time="1s"/>')}><code>&lt;break time="1s"/&gt;</code><Plus size={14}/></button></section>
-    <section><div className="help-icon rose"><Sparkles size={19}/></div><h3>表演动作</h3><p>纯 C 引擎目前实验性支持笑声与叹息。</p><button onClick={() => insert('[laugh]')}><code>[laugh]</code><Plus size={14}/></button><button onClick={() => insert('[sigh]')}><code>[sigh]</code><Plus size={14}/></button></section>
-    <section><div className="help-icon mint"><BookOpen size={19}/></div><h3>标点与节奏</h3><p>逗号适合短换气，句号用于完整收束；长句可拆为两段。</p><div className="example-copy">“慢一点，听见了吗？<br/>现在，我们重新开始。”</div></section>
-    <section><div className="help-icon blue"><WandSparkles size={19}/></div><h3>推荐写法</h3><p>标签紧邻要修饰的句子，连续标签不要超过两个。</p><div className="example-copy"><em>推荐</em> [sigh] 好吧，[pause:400ms] 我答应你。</div></section>
-  </div><div className="help-footer"><span><CircleHelp size={15}/> 停顿标记由声织处理；表演标签由模型解释，效果会随音色和随机种子变化。</span><button className="primary-action compact" onClick={close}>明白了</button></div></div></div>; }
+function Modal({ title, subtitle, close, children }: { title: string; subtitle: string; close: () => void; children: React.ReactNode }) {
+  return <div className="modal-backdrop" onMouseDown={event => event.target === event.currentTarget && close()}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title"><header><div><h2 id="modal-title">{title}</h2><p>{subtitle}</p></div><button className="icon-button" aria-label="关闭" onClick={close}><X size={18}/></button></header>{children}</section></div>;
+}

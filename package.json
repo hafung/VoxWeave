@@ -15,19 +15,28 @@
     "build:preload": "esbuild electron/preload.ts --bundle --platform=node --format=cjs --external:electron --outfile=dist-electron/electron/preload.cjs",
     "build": "tsc -p tsconfig.electron.json && pnpm build:preload && vite build",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.electron.json --noEmit",
-    "test": "vitest run --exclude \"dist-electron/**\"",
+    "test": "vitest run --exclude \"dist-electron/**\" --exclude \".windows-smoke/**\"",
     "start": "electron .",
     "cli": "tsx cli/voxweave.ts",
-    "package:win": "pnpm build && electron-builder --win nsis portable"
+    "verify:resources": "node scripts/verify-offline-resources.mjs",
+    "smoke:qwen": "node scripts/smoke-qwen-engine.mjs",
+    "smoke:sensevoice": "node scripts/smoke-sensevoice.mjs",
+    "smoke:win": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-windows.ps1",
+    "smoke:composition:win": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-composition-windows.ps1",
+    "smoke:package:win": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-packaged-windows.ps1",
+    "package:win": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-windows-offline.ps1",
+    "package:win:installer": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-windows-offline.ps1 -IncludeSetup"
   },
   "dependencies": {
     "@fontsource-variable/manrope": "^5.2.8",
     "@fontsource-variable/noto-sans-sc": "^5.2.8",
+    "@hyperframes/core": "0.8.38",
     "@hyperframes/player": "0.8.38",
     "@hyperframes/producer": "0.8.38",
     "@node-rs/jieba": "2.0.3",
     "commander": "^14.0.0",
     "electron-store": "^11.0.2",
+    "gsap": "3.14.2",
     "lucide-react": "^0.468.0",
     "puppeteer": "25.10.0",
     "puppeteer-core": "25.10.0",
@@ -76,8 +85,7 @@
     },
     "win": {
       "target": [
-        "nsis",
-        "portable"
+        "nsis"
       ]
     },
     "nsis": {
@@ -85,9 +93,6 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true
-    },
-    "portable": {
-      "artifactName": "VoxWeave-Portable-${version}-${arch}.${ext}"
     }
   }
 }
