@@ -8,11 +8,11 @@ Qwen3-TTS 0.6B CustomVoice and Base model weights are published by the Qwen team
 
 OpenBLAS is Copyright (c) 2011-2014, The OpenBLAS Project, and is distributed under the BSD 3-Clause License. The reviewed Windows engine bundle includes OpenBLAS 0.3.34, LLVM-MinGW winpthreads, LZ4 notices, the required DLLs, and hash-verified build metadata under `resources/engine/`.
 
-FFmpeg 8.1 is distributed under LGPL v2.1 or later. VoxWeave uses the Windows x64 LGPL build produced by [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds). Its complete build license is bundled at `resources/ffmpeg/LICENSE.txt`; corresponding source and reproducible build scripts are available from that repository and [ffmpeg.org](https://ffmpeg.org/).
+The bundled FFmpeg 8.1 executable is the Windows x64 **GPL v3 or later** build produced by [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds), including libx264 for software H.264 rendering. It replaces the earlier LGPL-only executable, which lacked Producer's required encoder. Its license is bundled at `resources/ffmpeg/LICENSE.txt`; exact binary provenance and hashes are recorded in its manifest. Corresponding source/build recipes are linked in `resources/ffmpeg/README.md`. FFmpeg runs as a separate executable; its GPL terms must be retained with redistribution.
 
-[HyperFrames Player and Producer](https://github.com/heygen-com/hyperframes) are distributed under the Apache License 2.0. VoxWeave keeps both behind a renderer-neutral EditPlan boundary. Producer is installed for integration work but is not yet enabled in the default production path.
+[HyperFrames Player and Producer](https://github.com/heygen-com/hyperframes) are distributed under the Apache License 2.0. VoxWeave keeps both behind a renderer-neutral EditPlan boundary. Producer renders the same local composition used by preview.
 
-[Puppeteer](https://github.com/puppeteer/puppeteer) is distributed under the Apache License 2.0. The npm dependency is pinned for HyperFrames compatibility; a browser binary is not currently bundled.
+[Puppeteer](https://github.com/puppeteer/puppeteer) is distributed under the Apache License 2.0. The pinned Chrome for Testing Headless Shell 152.0.7977.75 is bundled under `resources/browser/`; its complete bundled license and third-party credits are in `chrome-headless-shell-win64/LICENSE.headless_shell`.
 
 [`@node-rs/jieba`](https://github.com/napi-rs/node-rs) is distributed under the MIT License and provides local Chinese word segmentation.
 

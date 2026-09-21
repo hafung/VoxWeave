@@ -1,5 +1,6 @@
 import type { MediaAsset, SearchAssetsRequest } from '../../shared/library.js';
 import type { LibraryDatabase } from './database.js';
+import { expandKeywords } from '../../shared/keywords.js';
 
 export interface RankedAsset { asset: MediaAsset; score: number; reasons: string[] }
 
@@ -25,7 +26,7 @@ function scoreAsset(asset: MediaAsset, request: SearchAssetsRequest, fullTextSco
 }
 
 export function searchAssets(database: LibraryDatabase, request: SearchAssetsRequest): RankedAsset[] {
-  const expression = request.query.replace(/["'*():]/gu, ' ').trim().split(/\s+/u).filter(Boolean).map(term => `"${term}"`).join(' OR ');
+  const expression = expandKeywords(request.query).map(term => term.replace(/["'*():]/gu, ' ').trim()).filter(Boolean).map(term => `"${term}"`).join(' OR ');
   const fullText = expression
     ? database.fullText(expression, request.limit * 4)
     : database.list(request.limit * 4).map(asset => ({ asset, bm25: 0 }));

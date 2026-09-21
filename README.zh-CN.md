@@ -85,11 +85,23 @@ pnpm build
 .\scripts\download-model.ps1 -Variant base-0.6b
 .\scripts\setup-sensevoice.ps1
 .\scripts\setup-ffmpeg.ps1
+.\scripts\setup-render-browser.ps1
 pnpm verify:resources
 pnpm package:win
 ```
 
-`package:win` 生成 `release\VoxWeave-Portable-<version>-<arch>.zip`；`package:win:installer` 会额外请求 NSIS Setup。两者都会先严格校验模型、原生 Qwen 引擎、依赖 DLL、FFmpeg 和许可证闭包。
+`package:win` 自动构建并生成 `release\VoxWeave-Portable-<version>-x64\VoxWeave.exe`、同名 ZIP 和 SHA-256 文件；`package:win:installer` 会额外请求 NSIS Setup。两者都会先严格校验模型、原生 Qwen 引擎、依赖 DLL、FFmpeg、渲染浏览器和许可证闭包。资源已准备好时无需重新下载。
+
+当前开发发行物为 `release\VoxWeave-Portable-0.2.2-x64` 和同名 ZIP。0.2.1 是旧界面包，顶部“素材库”会直接打开文件选择框；0.2.2 会打开完整素材管理界面。
+
+同名发行目录或 ZIP 已存在时脚本会停止，保留旧包。新版本先更新 `package.json` 版本；同版本临时测试可指定其他输出目录：
+
+```powershell
+pnpm package:win -ReleaseDir .\release-test
+pnpm smoke:package:win -PackageDir .\release-test\VoxWeave-Portable-0.2.2-x64 -WithExport
+```
+
+打包请使用 Windows Node/pnpm 和 Windows 安装的依赖，不要复用 WSL 的 `node_modules`。开发环境若同时使用两者，可用独立 Windows staging 目录，并通过打包脚本的 `-ProjectDir`、`-ResourceDir`、`-ReleaseDir` 指定输入与输出；`-SkipBuild` 仅适用于已同步最新构建产物的目录。
 
 开发 CLI 时，需要指定兼容的引擎、模型和 FFmpeg：
 
@@ -115,7 +127,11 @@ scripts/   模型和引擎准备工具
 
 Electron、React、TypeScript 和原生 C 后端都具备跨平台基础。目前的发行流水线、DLL 资源闭包和安装程序仍是 Windows 专用；真正发布 macOS/Linux 版本还需要对应平台的引擎构建、资源打包、CI 和端到端验证。
 
-声织的方向不止于“输入文字、导出语音”。后续计划围绕创作者工作流扩展批量旁白、时间线音频、字幕对齐、媒体拼装，并逐步发展为本地优先的混剪与内容创作平台。
+当前开发版本已支持“文案 + 可选原视频 → TTS → 字幕对齐 → 本地素材补画面 → 预览 → MP4 导出”。预览生成后可选择本地 BGM、调整音量和人声闪避，先应用试听，再导出 H.264/AAC 视频。
+
+顶部“素材库”支持多选导入视频、图片和音频、检索、预览、批量人工标签及规则自动标签。Pexels 页可配置 API Key，使用中英文关键词搜索并选择下载免费图片/视频；下载素材保留作者和许可来源。没有 Key 也可以完整使用本地流程。自动标签目前基于文件名、目录和媒体属性，不代表视觉 AI 内容识别。
+
+新构建机需要先运行 `scripts/setup-render-browser.ps1` 与 `scripts/setup-ffmpeg.ps1`。导出使用固定的离线浏览器和包含 libx264 的 FFmpeg **GPL** 包；详细许可证见 `LICENSES.md`。此开发版本已验证短样片导出，更新后的安装包与长视频压力验收尚未完成。
 
 自动成片方向已经明确为“文案 + 可选原始视频 → TTS → 逐词字幕 → 自动 B-roll → 成品视频”，而不是通用剪辑器。详细决策见：
 

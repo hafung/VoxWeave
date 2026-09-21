@@ -8,6 +8,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 const execFileAsync = promisify(execFile);
 const temporary: string[] = [];
 const required = [
+  'browser/chrome-headless-shell-win64/chrome-headless-shell.exe',
+  'browser/chrome-headless-shell-win64/LICENSE.headless_shell',
+  'browser/manifest.json',
   'engine/qwen_tts.exe',
   'engine/libopenblas.dll',
   'engine/libwinpthread-1.dll',

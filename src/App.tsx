@@ -1,4 +1,6 @@
 import '@hyperframes/player';
+import './library.css';
+import { LibraryPanel } from './LibraryPanel';
 import type { HyperframesPlayer } from '@hyperframes/player';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -8,7 +10,7 @@ import {
 import { estimateDuration } from '../shared/markup';
 import type { EditPlan } from '../shared/edit-plan';
 import type { MediaAsset } from '../shared/library';
-import type { CompositionProgressEvent, EngineStatus, GenerateCompositionRequest } from '../shared/types';
+import type { CompositionProgressEvent, EngineStatus, GenerateCompositionRequest, ExportProgress } from '../shared/types';
 
 const api = () => window.voxweave;
 const voices = [
@@ -32,6 +34,14 @@ export function App() {
   const [sourceVideoPath, setSourceVideoPath] = useState<string>();
   const [moreOpen, setMoreOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [libraryOpen, setLibraryOpen] = useState(false);
+  const [exportProgress, setExportProgress] = useState<ExportProgress>();
+  const [exportJob, setExportJob] = useState<string>();
+  const [exportPending, setExportPending] = useState(false);
+  const [bgmAsset, setBgmAsset] = useState('');
+  const [bgmVolume, setBgmVolume] = useState(.15);
+  const [bgmDucking, setBgmDucking] = useState(true);
+  const [bgmBusy, setBgmBusy] = useState(false);
   const [status, setStatus] = useState<EngineStatus>({ state: 'missing', backend: 'none', message: '正在检测本地引擎…' });
   const [enginePath, setEnginePath] = useState('');
   const [modelDir, setModelDir] = useState('');
@@ -45,6 +55,15 @@ export function App() {
   const [assets, setAssets] = useState<MediaAsset[]>([]);
   const [replacingScene, setReplacingScene] = useState<string>();
   const playerRef = useRef<HyperframesPlayer>(null);
+  useEffect(() => api()?.onExportProgress(event => {
+    setExportProgress(event);
+    if (['complete', 'error', 'cancelled'].includes(event.phase)) { setExportJob(undefined); setExportPending(false); }
+  }), []);
+  useEffect(() => {
+    if (!plan) return;
+    setBgmAsset(plan.bgm.enabled ? plan.bgm.assetId ?? '' : '');
+    setBgmVolume(plan.bgm.volume); setBgmDucking(plan.bgm.ducking);
+  }, [plan?.id, plan?.revision]);
 
   useEffect(() => {
     const desktop = api();
@@ -82,7 +101,8 @@ export function App() {
   }, [preview?.entryUrl]);
 
   const estimatedSeconds = useMemo(() => estimateDuration(script), [script]);
-  const working = Boolean(jobId);
+  const working = Boolean(jobId) || exportPending || Boolean(exportJob) || bgmBusy;
+  const bgmDirty = !!plan && (bgmAsset !== (plan.bgm.enabled ? plan.bgm.assetId ?? '' : '') || bgmVolume !== plan.bgm.volume || bgmDucking !== plan.bgm.ducking);
   const activeStage = stages.findIndex(stage => stage.phase === progress?.phase);
 
   async function generate() {
@@ -93,6 +113,7 @@ export function App() {
     }
     if (status.state === 'missing') { setSettingsOpen(true); return; }
     setPreviewError(undefined); setPreview(undefined); setPlan(undefined);
+    setExportProgress(undefined);
     setProgress({ jobId: 'pending', phase: 'drafting', progress: 0.01, message: '正在创建本地工程…' });
     try {
       const result = await desktop.generateComposition({ script, voiceId, aspectRatio, captionStyle, sourceVideoPath, language: voiceId === 'ryan' ? 'English' : 'Chinese', precision: 'int8' });
@@ -107,9 +128,21 @@ export function App() {
     if (selected) setSourceVideoPath(selected);
   }
 
-  async function importAssets() {
-    const imported = await api()?.importAssets();
-    if (imported?.length) setAssets(await api()!.listAssets());
+  async function applyBgm() {
+    if (!projectId) return;
+    setBgmBusy(true);
+    try {
+      const result = await api()!.updateBgm(projectId, { enabled: !!bgmAsset, assetId: bgmAsset || undefined, volume: bgmVolume, ducking: bgmDucking });
+      setPlan(result.plan); setPreview(result.preview); setPreviewError(undefined); setExportProgress(undefined);
+    } catch (error) { setPreviewError(error instanceof Error ? error.message : String(error)); }
+    finally { setBgmBusy(false); }
+  }
+  async function exportVideo() {
+    if (!projectId) return;
+    setExportPending(true); setExportProgress(undefined);
+    try { const result = await api()!.exportVideo(projectId); if (result) setExportJob(result.jobId); }
+    catch (error) { setExportProgress({ jobId: '', phase: 'error', progress: 0, message: error instanceof Error ? error.message : String(error) }); }
+    finally { setExportPending(false); }
   }
 
   async function replaceScene(sceneId: string) {
@@ -117,7 +150,7 @@ export function App() {
     setReplacingScene(sceneId);
     try {
       const result = await api()?.replaceScene(projectId, sceneId);
-      if (result) { setPlan(result.plan); setPreview(result.preview); setPreviewError(undefined); }
+      if (result) { setPlan(result.plan); setPreview(result.preview); setPreviewError(undefined); setExportProgress(undefined); }
     } catch (error) {
       setPreviewError(error instanceof Error ? error.message : String(error));
     } finally { setReplacingScene(undefined); }
@@ -132,7 +165,7 @@ export function App() {
     <header className="topbar drag-region">
       <div className="brand no-drag"><span className="brand-mark"><AudioLines size={19}/></span><strong>声织</strong><small>VOXWEAVE</small></div>
       <div className="top-actions no-drag">
-        <button className="library-button" aria-label={`素材库，${assets.length} 个素材`} onClick={importAssets}><Library size={16}/> <em>素材库</em> <span>{assets.length}</span></button>
+        <button className="library-button" aria-label={`素材库，${assets.length} 个素材`} onClick={() => setLibraryOpen(true)}><Library size={16}/> <em>素材库</em> <span>{assets.length}</span></button>
         <button className={`engine-pill ${status.state}`} onClick={() => setSettingsOpen(true)}><i/>{status.state === 'idle' ? '本地引擎就绪' : '配置引擎'}</button>
         <button className="icon-button" aria-label="打开引擎设置" onClick={() => setSettingsOpen(true)}><Settings2 size={18}/></button>
       </div>
@@ -168,8 +201,8 @@ export function App() {
         </div>}
 
         <div className="primary-row">
-          {working && <button className="cancel-button" onClick={() => jobId && api()?.cancelComposition(jobId)}><Square size={14} fill="currentColor"/> 取消</button>}
-          <button className="generate-button" disabled={working || !script.trim()} onClick={generate}><WandSparkles size={18}/>{working ? '正在自动成片…' : progress?.phase === 'error' || progress?.phase === 'cancelled' ? '重新生成' : '生成视频'}</button>
+          {jobId && <button className="cancel-button" onClick={() => api()?.cancelComposition(jobId)}><Square size={14} fill="currentColor"/> 取消生成</button>}
+          <button className="generate-button" disabled={working || !script.trim()} onClick={generate}><WandSparkles size={18}/>{jobId ? '正在自动成片…' : exportJob || exportPending ? '正在导出视频…' : bgmBusy ? '正在应用配乐…' : progress?.phase === 'error' || progress?.phase === 'cancelled' ? '重新生成' : '生成视频'}</button>
         </div>
       </section>
 
@@ -187,11 +220,28 @@ export function App() {
             <span className="scene-number">{String(index + 1).padStart(2, '0')}</span>
             <span className="scene-type">{scene.visual.type === 'kinetic-text' ? <Sparkles size={14}/> : scene.visual.type === 'image' ? <Image size={14}/> : <Video size={14}/>}</span>
             <div><b>{scene.script}</b><small>{(scene.startMs / 1000).toFixed(1)}–{(scene.endMs / 1000).toFixed(1)}s · {scene.visual.type}</small></div>
-            <button onClick={() => replaceScene(scene.id)} disabled={Boolean(replacingScene)}>{replacingScene === scene.id ? <Activity size={14}/> : <RefreshCw size={14}/>} 换画面</button>
+            <button onClick={() => replaceScene(scene.id)} disabled={working || Boolean(replacingScene)}>{replacingScene === scene.id ? <Activity size={14}/> : <RefreshCw size={14}/>} 换画面</button>
           </article>)}</div>
+        </div>}
+        {plan && preview && <div className="export-controls">
+          <div className="bgm-controls">
+            <label>背景音乐<select disabled={working} value={bgmAsset} onChange={event => setBgmAsset(event.target.value)}><option value="">不添加配乐</option>{assets.filter(asset => asset.type === 'audio').map(asset => <option key={asset.id} value={asset.id}>{asset.name}</option>)}</select><button onClick={() => setLibraryOpen(true)}>导入 BGM</button></label>
+            {bgmAsset && <><label>音量 {Math.round(bgmVolume * 100)}%<input type="range" min="0" max="1" step="0.01" value={bgmVolume} disabled={working} onChange={event => setBgmVolume(Number(event.target.value))}/></label><label><input type="checkbox" checked={bgmDucking} disabled={working} onChange={event => setBgmDucking(event.target.checked)}/> 旁白说话时降低配乐音量</label></>}
+            <button disabled={working || !bgmDirty} onClick={applyBgm}>{bgmBusy ? '正在混音…' : '应用配乐并试听'}</button>
+          </div>
+          <div className="export-actions"><button className="export-primary" disabled={working || !!replacingScene || bgmDirty} onClick={exportVideo}>{exportJob ? '正在导出…' : '导出 MP4'}</button>
+            {exportJob && <button onClick={() => api()?.cancelExport(exportJob)}>取消导出</button>}
+            {exportProgress?.outputPath && <button onClick={() => api()?.reveal(exportProgress.outputPath!)}>打开成品所在文件夹</button>}
+          </div>
+          {bgmDirty && <small>配乐设置已修改，请先应用并试听。</small>}
+          {exportProgress && <div className="export-progress" role={exportProgress.phase === 'error' ? 'alert' : 'status'}><span>{exportProgress.message}</span>{exportJob && <progress max="1" value={exportProgress.progress}/>}</div>}
         </div>}
       </section>
     </main>
+
+    {libraryOpen && <Modal title="素材库" subtitle="整理画面、图片与声音，为下一条视频积累素材" close={() => setLibraryOpen(false)} wide>
+      <LibraryPanel changed={async () => setAssets(await api()!.listAssets())}/>
+    </Modal>}
 
     {settingsOpen && <Modal title="本地引擎设置" subtitle="自动成片的旁白由 Qwen3-TTS 在本机生成" close={() => setSettingsOpen(false)}>
       <div className="settings-form"><PathField label="引擎路径" value={enginePath} placeholder="qwen_tts.exe 或 WSL 可执行文件" choose={async () => { const selected = await api()?.chooseFile('engine'); if (selected) setEnginePath(selected); }}/><PathField label="0.6B 模型目录" value={modelDir} placeholder="qwen3-tts-0.6b-base" choose={async () => { const selected = await api()?.chooseFile('model'); if (selected) setModelDir(selected); }}/>
@@ -204,6 +254,22 @@ function PathField({ label, value, placeholder, choose }: { label: string; value
   return <label className="path-field"><span>{label}</span><div><input readOnly value={value} placeholder={placeholder}/><button onClick={choose}><FolderOpen size={15}/> 浏览</button></div></label>;
 }
 
-function Modal({ title, subtitle, close, children }: { title: string; subtitle: string; close: () => void; children: React.ReactNode }) {
-  return <div className="modal-backdrop" onMouseDown={event => event.target === event.currentTarget && close()}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title"><header><div><h2 id="modal-title">{title}</h2><p>{subtitle}</p></div><button className="icon-button" aria-label="关闭" onClick={close}><X size={18}/></button></header>{children}</section></div>;
+function Modal({ title, subtitle, close, children, wide }: { title: string; subtitle: string; close: () => void; children: React.ReactNode; wide?: boolean }) {
+  const ref = useRef<HTMLElement>(null);
+  const closeRef = useRef(close); closeRef.current = close;
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null;
+    ref.current?.querySelector<HTMLElement>('button')?.focus();
+    const keydown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') closeRef.current();
+      if (event.key !== 'Tab') return;
+      const nodes = Array.from(ref.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), summary, [tabindex="0"]') ?? []).filter(node => node.getClientRects().length);
+      const first = nodes[0], last = nodes.at(-1);
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+    };
+    document.addEventListener('keydown', keydown);
+    return () => { document.removeEventListener('keydown', keydown); previous?.focus(); };
+  }, []);
+  return <div className="modal-backdrop" onMouseDown={event => event.target === event.currentTarget && close()}><section ref={ref} className={`modal ${wide ? 'library-modal' : ''}`} role="dialog" aria-modal="true" aria-labelledby="modal-title"><header><div><h2 id="modal-title">{title}</h2><p>{subtitle}</p></div><button className="icon-button" aria-label="关闭" onClick={close}><X size={18}/></button></header>{children}</section></div>;
 }

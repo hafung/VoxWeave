@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { ImportAssetRequestSchema, MediaAssetSchema, type ImportAssetRequest, type MediaAsset } from '../../shared/library.js';
 import type { MediaProbe } from '../media/probe.js';
 import type { LibraryDatabase } from './database.js';
+import { automaticTags } from './tags.js';
 
 const execFileAsync = promisify(execFile);
 const extensions = {
@@ -59,13 +60,13 @@ export class AssetImporter {
     await mkdir(this.derivedDir, { recursive: true });
     const thumbnailPath = type === 'audio' || !this.thumbnailer ? undefined : path.join(this.derivedDir, `${id}.jpg`);
     if (thumbnailPath) await this.thumbnailer!.create(input.filePath, thumbnailPath, type);
-    const filenameTags = path.basename(input.filePath, path.extname(input.filePath)).split(/[\s_\-.]+/u).filter(tag => tag.length > 1);
+    const autoTags = automaticTags({ ...metadata, filePath: input.filePath, type, transcript: '' });
     return this.database.upsert(MediaAssetSchema.parse({
       id, filePath: path.resolve(input.filePath), fingerprint: hash, type,
       name: path.basename(input.filePath), durationMs: metadata.durationMs,
       width: metadata.width, height: metadata.height, fps: metadata.fps,
       hasAudio: metadata.hasAudio, thumbnailPath,
-      tags: [...new Set([...input.tags, ...filenameTags])], transcript: '', license: input.license,
+      tags: [...new Set([...input.tags, ...autoTags])], autoTags, manualTags: input.tags, transcript: '', license: input.license,
       createdAt: new Date().toISOString()
     }));
   }

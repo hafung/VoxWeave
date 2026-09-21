@@ -270,7 +270,7 @@ export function createDraftEditPlan(input: CreateDraftEditPlanInput): EditPlan {
     },
     scenes,
     captions: [],
-    bgm: { enabled: true, volume: 0.13, ducking: true },
+    bgm: { enabled: false, volume: 0.13, ducking: true },
     output: { format: 'mp4', videoCodec: 'h264', audioCodec: 'aac' }
   });
 }

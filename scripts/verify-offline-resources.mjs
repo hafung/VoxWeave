@@ -5,6 +5,9 @@ import path from 'node:path';
 import process from 'node:process';
 
 const REQUIRED_FILES = [
+  'browser/chrome-headless-shell-win64/chrome-headless-shell.exe',
+  'browser/chrome-headless-shell-win64/LICENSE.headless_shell',
+  'browser/manifest.json',
   'engine/qwen_tts.exe',
   'engine/libopenblas.dll',
   'engine/libwinpthread-1.dll',
@@ -126,6 +129,7 @@ async function main() {
   }
 
   const hashFailures = [
+    ...await verifyDeclaredHashes(root, 'browser/manifest.json'),
     ...await verifyDeclaredHashes(root, 'engine/manifest.json'),
     ...await verifyDeclaredHashes(root, 'models/qwen3-tts-0.6b-customvoice/manifest.json'),
     ...await verifyDeclaredHashes(root, 'models/qwen3-tts-0.6b-base/manifest.json'),

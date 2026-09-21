@@ -4,7 +4,8 @@ export const AssetTypeSchema = z.enum(['video', 'image', 'audio']);
 export const AssetLicenseSchema = z.object({
   status: z.enum(['user-owned', 'licensed', 'unknown']),
   source: z.string().trim().min(1),
-  note: z.string().trim().optional()
+  note: z.string().trim().optional(),
+  sourceUrl: z.string().url().optional(), author: z.string().optional(), licenseUrl: z.string().url().optional()
 }).strict();
 
 export const MediaAssetSchema = z.object({
@@ -20,6 +21,8 @@ export const MediaAssetSchema = z.object({
   hasAudio: z.boolean(),
   thumbnailPath: z.string().trim().min(1).optional(),
   tags: z.array(z.string().trim().min(1)),
+  autoTags: z.array(z.string()).default([]),
+  manualTags: z.array(z.string()).default([]),
   transcript: z.string().default(''),
   license: AssetLicenseSchema,
   createdAt: z.string().datetime()
@@ -44,3 +47,20 @@ export type MediaAsset = z.infer<typeof MediaAssetSchema>;
 export type ImportAssetRequest = z.infer<typeof ImportAssetRequestSchema>;
 export type SearchAssetsRequest = z.infer<typeof SearchAssetsRequestSchema>;
 export type AssetLicense = z.infer<typeof AssetLicenseSchema>;
+
+export const UpdateTagsSchema = z.object({
+  ids: z.array(z.string().min(1)).min(1).max(500),
+  tags: z.array(z.string().trim().min(1).max(80)).max(50),
+  mode: z.enum(['replace', 'append']).default('replace')
+}).strict();
+export const PexelsSearchSchema = z.object({
+  query: z.string().trim().min(1).max(150), type: z.enum(['video', 'image']),
+  page: z.number().int().min(1).max(100).default(1),
+  orientation: z.enum(['portrait', 'landscape', 'square']).optional()
+}).strict();
+export interface OnlineAsset {
+  id: string; type: 'video' | 'image'; name: string; thumbnailUrl: string;
+  sourceUrl: string; downloadUrl: string; author: string;
+  width: number; height: number; durationMs?: number; tags: string[];
+}
+export interface ImportReport { assets: MediaAsset[]; errors: Array<{ name: string; message: string }> }

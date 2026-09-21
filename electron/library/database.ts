@@ -7,7 +7,7 @@ interface AssetRow {
   id: string; file_path: string; fingerprint: string; type: string; name: string;
   duration_ms: number | null; width: number | null; height: number | null; fps: number | null;
   has_audio: number; thumbnail_path: string | null; tags_json: string; transcript: string;
-  license_json: string; created_at: string;
+  license_json: string; created_at: string; metadata_json: string;
 }
 
 function fromRow(row: AssetRow): MediaAsset {
@@ -15,7 +15,8 @@ function fromRow(row: AssetRow): MediaAsset {
     id: row.id, filePath: row.file_path, fingerprint: row.fingerprint, type: row.type, name: row.name,
     durationMs: row.duration_ms ?? undefined, width: row.width ?? undefined, height: row.height ?? undefined,
     fps: row.fps ?? undefined, hasAudio: Boolean(row.has_audio), thumbnailPath: row.thumbnail_path ?? undefined,
-    tags: JSON.parse(row.tags_json), transcript: row.transcript, license: JSON.parse(row.license_json), createdAt: row.created_at
+    tags: JSON.parse(row.tags_json), transcript: row.transcript, license: JSON.parse(row.license_json), createdAt: row.created_at,
+    manualTags: JSON.parse(row.tags_json), ...JSON.parse(row.metadata_json || '{}')
   });
 }
 
@@ -39,8 +40,12 @@ export class LibraryDatabase {
       );
       CREATE VIRTUAL TABLE IF NOT EXISTS asset_fts USING fts5(asset_id UNINDEXED, name, tags, transcript, tokenize='unicode61');
       CREATE INDEX IF NOT EXISTS assets_type_idx ON assets(type);
-      PRAGMA user_version=1;
     `);
+    const columns = this.sqlite.prepare('PRAGMA table_info(assets)').all() as Array<{ name: string }>;
+    if (!columns.some(column => column.name === 'metadata_json')) {
+      this.sqlite.exec("ALTER TABLE assets ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'; PRAGMA user_version=2;");
+    }
+    this.sqlite.exec('PRAGMA user_version=2;');
   }
 
   upsert(assetInput: MediaAsset): MediaAsset {
@@ -59,6 +64,8 @@ export class LibraryDatabase {
         asset.thumbnailPath ?? null, JSON.stringify(asset.tags), asset.transcript,
         JSON.stringify(asset.license), asset.createdAt
       );
+      this.sqlite.prepare('UPDATE assets SET metadata_json=? WHERE id=?').run(
+        JSON.stringify({ autoTags: asset.autoTags, manualTags: asset.manualTags }), asset.id);
       this.sqlite.prepare('DELETE FROM asset_fts WHERE asset_id=?').run(asset.id);
       this.sqlite.prepare('INSERT INTO asset_fts(asset_id,name,tags,transcript) VALUES(?,?,?,?)')
         .run(asset.id, asset.name, asset.tags.join(' '), asset.transcript);
@@ -82,6 +89,15 @@ export class LibraryDatabase {
 
   list(limit = 100): MediaAsset[] {
     return (this.sqlite.prepare('SELECT * FROM assets ORDER BY created_at DESC LIMIT ?').all(limit) as unknown as AssetRow[]).map(fromRow);
+  }
+
+  remove(id: string): void {
+    this.sqlite.exec('BEGIN IMMEDIATE');
+    try {
+      this.sqlite.prepare('DELETE FROM asset_fts WHERE asset_id=?').run(id);
+      this.sqlite.prepare('DELETE FROM assets WHERE id=?').run(id);
+      this.sqlite.exec('COMMIT');
+    } catch (error) { this.sqlite.exec('ROLLBACK'); throw error; }
   }
 
   fullText(query: string, limit = 100): Array<{ asset: MediaAsset; bm25: number }> {

@@ -28,6 +28,7 @@ resources/ffmpeg/*
 !resources/ffmpeg/README.md
 !resources/ffmpeg/manifest.json
 resources/offline-manifest.json
+resources/browser/chrome-headless-shell-win64/
 engine/qwen3-tts-c/*.o
 engine/qwen3-tts-c/*.d
 engine/qwen3-tts-c/*.exe

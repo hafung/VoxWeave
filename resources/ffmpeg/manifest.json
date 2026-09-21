@@ -1,19 +1,20 @@
 {
-    "version":  "n8.1.2-52-g5a03dfa0f6",
-    "source":  "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-12-13-12/ffmpeg-n8.1.2-52-g5a03dfa0f6-win64-lgpl-8.1.zip",
-    "license":  "LGPL v2.1 or later; see LICENSE.txt",
-    "files":  {
-                  "ffmpeg.exe":  {
-                                     "path":  "ffmpeg.exe",
-                                     "sha256":  "547737d0bfd668b9c8aeac4831ccc967d96c4cbdc19a5b14b71e103ed4a390e3"
-                                 },
-                  "ffprobe.exe":  {
-                                      "path":  "ffprobe.exe",
-                                      "sha256":  "3ff9e903a6257d3ff875f0a8919ec7972209435088662c87b49556b8fa132cbe"
-                                  },
-                  "LICENSE.txt":  {
-                                      "path":  "LICENSE.txt",
-                                      "sha256":  "da7eabb7bafdf7d3ae5e9f223aa5bdc1eece45ac569dc21b3b037520b4464768"
-                                  }
-              }
+  "version": "n8.1.2-52-g5a03dfa0f6",
+  "source": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-12-13-12/ffmpeg-n8.1.2-52-g5a03dfa0f6-win64-gpl-8.1.zip",
+  "license": "GPL v3 or later; see LICENSE.txt; includes libx264 for MP4 rendering",
+  "archiveSha256": "8ebd7e82791b8f753ade7fd6f2eacf8ce02127dfb1f25102d85154d1779cd2de",
+  "files": {
+    "ffmpeg.exe": {
+      "path": "ffmpeg.exe",
+      "sha256": "7b25e8c22217ccfc608bd609530620ccad0f8a0f9d1a6bf4ca3b09b46e9e1a66"
+    },
+    "ffprobe.exe": {
+      "path": "ffprobe.exe",
+      "sha256": "56fbe12cde902fe7ce85a3b20f200d8049c15370bd2b736979c0500e3d632a4c"
+    },
+    "LICENSE.txt": {
+      "path": "LICENSE.txt",
+      "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+    }
+  }
 }

@@ -14,7 +14,7 @@ it('replaces one scene in a new immutable revision while retaining the original 
   }});
   const candidate: MediaAsset = {
     id: 'candidate', filePath: '/media/candidate.mp4', fingerprint: 'c'.repeat(64), type: 'video', name: '产品展示.mp4',
-    durationMs: 3000, width: 1080, height: 1920, fps: 30, hasAudio: false, tags: ['电商', '产品'], transcript: '',
+    durationMs: 3000, width: 1080, height: 1920, fps: 30, hasAudio: false, tags: ['电商', '产品'], autoTags: [], manualTags: ['电商', '产品'], transcript: '',
     license: { status: 'licensed', source: 'brand-library' }, createdAt: '2026-09-15T00:00:00.000Z'
   };
   database.upsert(candidate);

@@ -73,8 +73,21 @@ export interface VoxWeaveApi {
   cancelComposition(jobId: string): Promise<void>;
   resumeLastProject(): Promise<{ plan: EditPlan; preview?: CompositionProgressEvent['preview'] } | null>;
   replaceScene(projectId: string, sceneId: string): Promise<{ plan: EditPlan; preview: NonNullable<CompositionProgressEvent['preview']> }>;
-  importAssets(): Promise<MediaAsset[]>;
+  importAssets(): Promise<ImportReport>;
   listAssets(): Promise<MediaAsset[]>;
+  searchAssets(query: string, type?: MediaAsset['type']): Promise<MediaAsset[]>;
+  updateAssetTags(ids: string[], tags: string[], mode: 'replace' | 'append'): Promise<void>;
+  autoTagAssets(ids: string[]): Promise<void>;
+  removeAssets(ids: string[]): Promise<void>;
+  pexelsStatus(): Promise<{ configured: boolean }>;
+  configurePexels(key: string): Promise<void>;
+  searchPexels(request: { query: string; type: 'video' | 'image'; page: number; orientation?: 'portrait' | 'landscape' | 'square' }): Promise<{ items: OnlineAsset[]; query: string }>;
+  downloadPexels(id: string): Promise<MediaAsset>;
+  openSource(url: string): Promise<void>;
+  updateBgm(projectId: string, bgm: EditPlan['bgm']): Promise<{ plan: EditPlan; preview: NonNullable<CompositionProgressEvent['preview']> }>;
+  exportVideo(projectId: string): Promise<{ jobId: string } | null>;
+  cancelExport(jobId: string): Promise<void>;
+  onExportProgress(listener: (event: ExportProgress) => void): () => void;
   synthesize(request: SynthesisRequest): Promise<{ jobId: string }>;
   cancel(jobId: string): Promise<void>;
   reveal(path: string): Promise<void>;
@@ -83,4 +96,8 @@ export interface VoxWeaveApi {
   onCompositionProgress(listener: (event: CompositionProgressEvent) => void): () => void;
 }
 import type { DraftPlanRequest, EditPlan } from './edit-plan.js';
-import type { MediaAsset } from './library.js';
+import type { MediaAsset, ImportReport, OnlineAsset } from './library.js';
+export interface ExportProgress {
+  jobId: string; progress: number; phase: 'preparing' | 'capturing' | 'encoding' | 'complete' | 'error' | 'cancelled';
+  message: string; outputPath?: string;
+}

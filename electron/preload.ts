@@ -13,6 +13,23 @@ const api: VoxWeaveApi = {
   replaceScene: (projectId, sceneId) => ipcRenderer.invoke('composition:replace-scene', projectId, sceneId),
   importAssets: () => ipcRenderer.invoke('library:import'),
   listAssets: () => ipcRenderer.invoke('library:list'),
+  searchAssets: (query, type) => ipcRenderer.invoke('library:search', query, type),
+  updateAssetTags: (ids, tags, mode) => ipcRenderer.invoke('library:tags', { ids, tags, mode }),
+  autoTagAssets: ids => ipcRenderer.invoke('library:auto-tags', ids),
+  removeAssets: ids => ipcRenderer.invoke('library:remove', ids),
+  pexelsStatus: () => ipcRenderer.invoke('pexels:status'),
+  configurePexels: key => ipcRenderer.invoke('pexels:configure', key),
+  searchPexels: request => ipcRenderer.invoke('pexels:search', request),
+  downloadPexels: id => ipcRenderer.invoke('pexels:download', id),
+  openSource: url => ipcRenderer.invoke('library:open-source', url),
+  updateBgm: (projectId, bgm) => ipcRenderer.invoke('composition:bgm', projectId, bgm),
+  exportVideo: projectId => ipcRenderer.invoke('composition:export', projectId),
+  cancelExport: jobId => ipcRenderer.invoke('composition:cancel-export', jobId),
+  onExportProgress: listener => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: import('../shared/types.js').ExportProgress) => listener(payload);
+    ipcRenderer.on('composition:export-progress', handler);
+    return () => ipcRenderer.removeListener('composition:export-progress', handler);
+  },
   synthesize: request => ipcRenderer.invoke('engine:synthesize', request),
   cancel: jobId => ipcRenderer.invoke('engine:cancel', jobId),
   reveal: path => ipcRenderer.invoke('shell:reveal', path),

@@ -6,7 +6,7 @@ import { QwenEngine } from '../electron/engine.js';
 import { AUDIO_FORMATS, LANGUAGES, type AudioFormat, type Language, type SynthesisRequest } from '../shared/types.js';
 
 const program = new Command();
-program.name('voxweave').description('声织 VoxWeave — Qwen3-TTS 本地语音合成 CLI').version('0.2.0');
+program.name('voxweave').description('声织 VoxWeave — Qwen3-TTS 本地语音合成 CLI').version('0.2.2');
 program
   .requiredOption('-t, --text <text>', '待合成文本，支持 [pause:500ms] 与 <break time="1s"/>')
   .requiredOption('-o, --output <wav>', '输出 WAV 路径')
