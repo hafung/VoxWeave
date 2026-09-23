@@ -44,6 +44,34 @@ export class QwenEngine {
 
   cancel(): void { if (this.process && !this.process.killed) this.process.kill(); }
 
+  async createVoiceProfile(referenceAudioPath: string, baseModelDir: string, outputPath: string): Promise<void> {
+    if (!this.config.ffmpegPath || !await exists(this.config.ffmpegPath)) throw new Error('克隆音色需要内置 FFmpeg');
+    if (!await exists(baseModelDir)) throw new Error('找不到 Qwen3-TTS Base 模型');
+    const temp = await mkdtemp(path.join(os.tmpdir(), 'voxweave-voice-'));
+    try {
+      const normalized = path.join(temp, 'reference.wav');
+      await this.ffmpeg(['-y', '-hide_banner', '-loglevel', 'error', '-i', referenceAudioPath,
+        '-ar', '24000', '-ac', '1', '-c:a', 'pcm_s16le', normalized]);
+      await mkdir(path.dirname(outputPath), { recursive: true });
+      const enginePath = this.config.enginePath!;
+      const args = ['-d', baseModelDir, '--ref-audio', normalized, '--save-voice', outputPath, '--silent'];
+      const native = enginePath.toLowerCase().endsWith('.exe');
+      const command = native ? enginePath : 'wsl.exe';
+      const spawnArgs = native ? args : ['--', enginePath, ...args.map(arg => /^[A-Za-z]:\\/.test(arg) ? wslPath(arg) : arg)];
+      await new Promise<void>((resolve, reject) => {
+        const child = spawn(command, spawnArgs, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+        let stderr = '';
+        child.stderr?.on('data', chunk => { stderr += chunk.toString(); if (stderr.length > 16_384) stderr = stderr.slice(-16_384); });
+        child.once('error', reject);
+        child.once('exit', code => code === 0 ? resolve() : reject(new Error(stderr.trim() || `音色克隆失败，代码 ${code}`)));
+      });
+      if (!await exists(outputPath)) throw new Error('音色克隆未生成文件');
+    } catch (error) {
+      await rm(outputPath, { force: true });
+      throw error;
+    } finally { await rm(temp, { recursive: true, force: true }); }
+  }
+
   async synthesize(request: SynthesisRequest, progress: Progress): Promise<void> {
     const temp = await mkdtemp(path.join(os.tmpdir(), 'voxweave-export-'));
     try {

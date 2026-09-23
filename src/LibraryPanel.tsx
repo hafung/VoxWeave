@@ -105,8 +105,8 @@ export function LibraryPanel({ changed }: { changed: () => Promise<void> }) {
       {!assets.length && <p className="library-empty">还没有匹配的素材。导入本地视频、图片或 BGM，或者切换到 Pexels 搜索。</p>}
     </> : <>
       <p className="library-hint">按需搜索和下载图片、视频，授权遵循 Pexels License。<button onClick={() => run('打开 Pexels…', () => api().openSource('https://www.pexels.com/'))}>素材由 Pexels 提供 <ExternalLink size={14} aria-hidden="true"/></button></p>
-      <details open={!configured}><summary>{configured ? 'Pexels API Key 已配置（点击修改）' : '配置 Pexels API Key'}</summary>
-        <div className="library-toolbar"><label className="key-field">API Key<input type="password" autoComplete="off" value={key} onChange={event => setKey(event.target.value)} placeholder="输入 API Key，保存在本机系统加密存储"/></label>
+      <details className="pexels-config"><summary>{configured ? 'Pexels API Key 已配置（点击修改）' : '配置 Pexels API Key'}</summary>
+        <div className="pexels-key-row"><label className="key-field"><span>API Key</span><input type="password" autoComplete="off" value={key} onChange={event => setKey(event.target.value)} placeholder="输入 API Key，保存在本机系统加密存储"/></label>
           <button disabled={!!busy || !key.trim()} onClick={() => run('保存设置…', async () => { await api().configurePexels(key); setKey(''); setConfigured(true); setNotice('API Key 已保存'); })}>保存</button>
           <button onClick={() => run('打开申请页面…', () => api().openSource('https://www.pexels.com/api/'))}>申请 Key</button>
           {configured && <button disabled={!!busy} onClick={() => run('清除设置…', async () => { await api().configurePexels(''); setConfigured(false); })}>清除</button>}

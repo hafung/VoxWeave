@@ -103,6 +103,14 @@ pnpm smoke:package:win -PackageDir .\release-test\VoxWeave-Portable-0.2.2-x64 -W
 
 打包请使用 Windows Node/pnpm 和 Windows 安装的依赖，不要复用 WSL 的 `node_modules`。开发环境若同时使用两者，可用独立 Windows staging 目录，并通过打包脚本的 `-ProjectDir`、`-ResourceDir`、`-ReleaseDir` 指定输入与输出；`-SkipBuild` 仅适用于已同步最新构建产物的目录。
 
+本机 Windows PowerShell 没有全局 `pnpm` 命令时，可直接运行已有 Node/pnpm CLI 的引导脚本。它会在独立 staging 目录安装 Windows 依赖、构建并生成 `release-dev` 中的便携目录和 ZIP，不会覆盖现有 `release`：
+
+```powershell
+.\scripts\build-portable-windows.ps1
+```
+
+此脚本默认使用 `C:\Users\admin\.cache\codex-runtimes\codex-primary-runtime\dependencies\node` 下的运行时；换机器时通过 `-NodePath` 与 `-PnpmCliPath` 指定其他路径。已存在同版本 `release-dev` 包时，使用 `-ReleaseDir .\release-dev-2` 选择新输出目录。
+
 开发 CLI 时，需要指定兼容的引擎、模型和 FFmpeg：
 
 ```powershell

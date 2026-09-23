@@ -10,14 +10,23 @@ import {
 import { estimateDuration } from '../shared/markup';
 import type { EditPlan } from '../shared/edit-plan';
 import type { MediaAsset } from '../shared/library';
-import type { CompositionProgressEvent, EngineStatus, GenerateCompositionRequest, ExportProgress } from '../shared/types';
+import type { CompositionProgressEvent, EngineStatus, GenerateCompositionRequest, ExportProgress, VoiceProfile } from '../shared/types';
 
 const api = () => window.voxweave;
 const voices = [
   { id: 'vivian', name: 'Vivian', note: '中文女声 · 清晰自然' },
   { id: 'serena', name: 'Serena', note: '中文女声 · 沉稳温暖' },
-  { id: 'ryan', name: 'Ryan', note: '英文男声 · 叙事感' }
+  { id: 'uncle_fu', name: 'Uncle Fu', note: '中文男声 · 沉稳' },
+  { id: 'dylan', name: 'Dylan', note: '中文男声 · 活力' },
+  { id: 'ryan', name: 'Ryan', note: '英文男声 · 叙事感' },
+  { id: 'aiden', name: 'Aiden', note: '英文男声' },
+  { id: 'eric', name: 'Eric', note: '英文男声' },
+  { id: 'ono_anna', name: 'Ono Anna', note: '日语女声' },
+  { id: 'sohee', name: 'Sohee', note: '韩语女声' }
 ];
+const voiceLanguages: Record<string, GenerateCompositionRequest['language']> = {
+  ryan: 'English', aiden: 'English', eric: 'English', ono_anna: 'Japanese', sohee: 'Korean'
+};
 const stages: Array<{ phase: CompositionProgressEvent['phase']; label: string }> = [
   { phase: 'drafting', label: '分镜' }, { phase: 'narrating', label: '旁白' },
   { phase: 'resolving', label: '时间轴' }, { phase: 'aligning', label: '字幕' },
@@ -29,6 +38,13 @@ type Preview = NonNullable<CompositionProgressEvent['preview']>;
 export function App() {
   const [script, setScript] = useState('产品很好，却一直卖不出去？问题也许不在产品，而在表达。让声织帮你把文案、旁白和画面，自动编成一条完整视频。');
   const [voiceId, setVoiceId] = useState('vivian');
+  const [clonedVoices, setClonedVoices] = useState<VoiceProfile[]>([]);
+  const [cloneOpen, setCloneOpen] = useState(false);
+  const [cloneName, setCloneName] = useState('');
+  const [cloneReference, setCloneReference] = useState('');
+  const [cloneBusy, setCloneBusy] = useState(false);
+  const [cloneError, setCloneError] = useState('');
+  const [sourceError, setSourceError] = useState('');
   const [aspectRatio, setAspectRatio] = useState<NonNullable<GenerateCompositionRequest['aspectRatio']>>('9:16');
   const [captionStyle, setCaptionStyle] = useState<NonNullable<GenerateCompositionRequest['captionStyle']>>('commerce-bold');
   const [sourceVideoPath, setSourceVideoPath] = useState<string>();
@@ -73,6 +89,7 @@ export function App() {
       setStatus(result); setEnginePath(result.enginePath ?? ''); setModelDir(result.modelDir ?? '');
     });
     void desktop.listAssets().then(setAssets);
+    void desktop.listVoices().then(setClonedVoices);
     void desktop.resumeLastProject().then(last => {
       if (!last || receivedCompositionProgress) return;
       setPlan(last.plan); setProjectId(last.plan.id); setScript(last.plan.input.script);
@@ -116,7 +133,7 @@ export function App() {
     setExportProgress(undefined);
     setProgress({ jobId: 'pending', phase: 'drafting', progress: 0.01, message: '正在创建本地工程…' });
     try {
-      const result = await desktop.generateComposition({ script, voiceId, aspectRatio, captionStyle, sourceVideoPath, language: voiceId === 'ryan' ? 'English' : 'Chinese', precision: 'int8' });
+      const result = await desktop.generateComposition({ script, voiceId, aspectRatio, captionStyle, sourceVideoPath, language: voiceLanguages[voiceId] ?? 'Chinese', precision: 'int8' });
       jobRef.current = result.jobId; setJobId(result.jobId); setProjectId(result.projectId);
     } catch (error) {
       setProgress({ jobId: 'failed', phase: 'error', progress: 0, message: error instanceof Error ? error.message : String(error), recoverable: true });
@@ -125,7 +142,23 @@ export function App() {
 
   async function chooseSource() {
     const selected = await api()?.chooseFile('video');
-    if (selected) setSourceVideoPath(selected);
+    if (!selected) return;
+    try {
+      await api()!.importAsset(selected);
+      setSourceVideoPath(selected); setSourceError('');
+      setAssets(await api()!.listAssets());
+    } catch (error) { setSourceError(error instanceof Error ? error.message : String(error)); }
+  }
+
+  async function createClone() {
+    if (!cloneName.trim() || !cloneReference) return;
+    setCloneBusy(true); setCloneError('');
+    try {
+      const profile = await api()!.cloneVoice({ name: cloneName.trim(), referenceAudioPath: cloneReference });
+      setClonedVoices(items => [...items, profile]); setVoiceId(profile.id); setCloneOpen(false);
+      setCloneName(''); setCloneReference('');
+    } catch (error) { setCloneError(error instanceof Error ? error.message : String(error)); }
+    finally { setCloneBusy(false); }
   }
 
   async function applyBgm() {
@@ -171,7 +204,7 @@ export function App() {
       </div>
     </header>
 
-    <main className="creator-layout">
+    <main className={`creator-layout ${plan ? 'has-storyboard' : ''}`}>
       <section className="create-pane" aria-labelledby="create-title">
         <div className="pane-heading"><span>AUTO COMPOSITION</span><h1 id="create-title">一段文案，自动成为一条片。</h1><p>旁白是真实时钟。字幕、画面和素材会跟着声音重新排好。</p></div>
 
@@ -186,12 +219,21 @@ export function App() {
           {sourceVideoPath ? <div className="source-selected"><span title={sourceVideoPath}>{sourceVideoPath.split(/[\\/]/u).at(-1)}</span><button aria-label="移除原始视频" onClick={() => setSourceVideoPath(undefined)} disabled={working}><X size={15}/></button></div>
             : <button className="secondary-button" onClick={chooseSource} disabled={working}><Upload size={15}/> 添加视频</button>}
         </div>
+        {sourceError && <p className="field-error" role="alert">原始视频入库失败：{sourceError}</p>}
 
         <button className="more-toggle" aria-expanded={moreOpen} onClick={() => setMoreOpen(value => !value)}><Settings2 size={15}/> 更多设置 <ChevronDown size={15}/></button>
         {moreOpen && <div className="settings-grid">
-          <label><span>音色</span><select value={voiceId} onChange={event => setVoiceId(event.target.value)}>{voices.map(voice => <option key={voice.id} value={voice.id}>{voice.name} · {voice.note}</option>)}</select></label>
+          <label><span>音色</span><select value={voiceId} onChange={event => setVoiceId(event.target.value)}>
+            <optgroup label="内置音色">{voices.map(voice => <option key={voice.id} value={voice.id}>{voice.name} · {voice.note}</option>)}</optgroup>
+            {!!clonedVoices.length && <optgroup label="我的克隆音色">{clonedVoices.map(voice => <option key={voice.id} value={voice.id}>{voice.name}</option>)}</optgroup>}
+          </select><button type="button" className="text-action" onClick={() => setCloneOpen(true)}>克隆新音色</button></label>
           <label><span>画幅</span><select value={aspectRatio} onChange={event => setAspectRatio(event.target.value as typeof aspectRatio)}><option>9:16</option><option>16:9</option><option>1:1</option></select></label>
           <label><span>字幕风格</span><select value={captionStyle} onChange={event => setCaptionStyle(event.target.value as typeof captionStyle)}><option value="commerce-bold">电商强调</option><option value="opinion-clean">观点口播</option><option value="brand-minimal">品牌极简</option><option value="info-card">信息卡片</option></select></label>
+          {plan && preview && <div className="bgm-controls">
+            <label>背景音乐<select disabled={working} value={bgmAsset} onChange={event => setBgmAsset(event.target.value)}><option value="">不添加配乐</option>{assets.filter(asset => asset.type === 'audio').map(asset => <option key={asset.id} value={asset.id}>{asset.name}</option>)}</select><button onClick={() => setLibraryOpen(true)}>导入 BGM</button></label>
+            {bgmAsset && <><label>音量 {Math.round(bgmVolume * 100)}%<input type="range" min="0" max="1" step="0.01" value={bgmVolume} disabled={working} onChange={event => setBgmVolume(Number(event.target.value))}/></label><label><input type="checkbox" checked={bgmDucking} disabled={working} onChange={event => setBgmDucking(event.target.checked)}/> 旁白说话时降低配乐音量</label></>}
+            <button disabled={working || !bgmDirty} onClick={applyBgm}>{bgmBusy ? '正在混音…' : '应用配乐并试听'}</button>
+          </div>}
         </div>}
 
         {progress && <div className={`job-status ${progress.phase}`} role="status" aria-live="polite">
@@ -214,21 +256,7 @@ export function App() {
         </div>
         {previewError && <div className="preview-error" role="alert"><span>{previewError}</span><button onClick={() => setPreview(value => value ? { ...value, entryUrl: `${value.entryUrl}?retry=${Date.now()}` } : value)}><RefreshCw size={14}/> 重试加载</button></div>}
 
-        {plan && <div className="storyboard" aria-label="分镜列表">
-          <div className="storyboard-title"><span>分镜卡片</span><small>不满意时只换当前画面</small></div>
-          <div className="scene-list">{plan.scenes.map((scene, index) => <article key={scene.id} className="scene-card">
-            <span className="scene-number">{String(index + 1).padStart(2, '0')}</span>
-            <span className="scene-type">{scene.visual.type === 'kinetic-text' ? <Sparkles size={14}/> : scene.visual.type === 'image' ? <Image size={14}/> : <Video size={14}/>}</span>
-            <div><b>{scene.script}</b><small>{(scene.startMs / 1000).toFixed(1)}–{(scene.endMs / 1000).toFixed(1)}s · {scene.visual.type}</small></div>
-            <button onClick={() => replaceScene(scene.id)} disabled={working || Boolean(replacingScene)}>{replacingScene === scene.id ? <Activity size={14}/> : <RefreshCw size={14}/>} 换画面</button>
-          </article>)}</div>
-        </div>}
         {plan && preview && <div className="export-controls">
-          <div className="bgm-controls">
-            <label>背景音乐<select disabled={working} value={bgmAsset} onChange={event => setBgmAsset(event.target.value)}><option value="">不添加配乐</option>{assets.filter(asset => asset.type === 'audio').map(asset => <option key={asset.id} value={asset.id}>{asset.name}</option>)}</select><button onClick={() => setLibraryOpen(true)}>导入 BGM</button></label>
-            {bgmAsset && <><label>音量 {Math.round(bgmVolume * 100)}%<input type="range" min="0" max="1" step="0.01" value={bgmVolume} disabled={working} onChange={event => setBgmVolume(Number(event.target.value))}/></label><label><input type="checkbox" checked={bgmDucking} disabled={working} onChange={event => setBgmDucking(event.target.checked)}/> 旁白说话时降低配乐音量</label></>}
-            <button disabled={working || !bgmDirty} onClick={applyBgm}>{bgmBusy ? '正在混音…' : '应用配乐并试听'}</button>
-          </div>
           <div className="export-actions"><button className="export-primary" disabled={working || !!replacingScene || bgmDirty} onClick={exportVideo}>{exportJob ? '正在导出…' : '导出 MP4'}</button>
             {exportJob && <button onClick={() => api()?.cancelExport(exportJob)}>取消导出</button>}
             {exportProgress?.outputPath && <button onClick={() => api()?.reveal(exportProgress.outputPath!)}>打开成品所在文件夹</button>}
@@ -237,7 +265,25 @@ export function App() {
           {exportProgress && <div className="export-progress" role={exportProgress.phase === 'error' ? 'alert' : 'status'}><span>{exportProgress.message}</span>{exportJob && <progress max="1" value={exportProgress.progress}/>}</div>}
         </div>}
       </section>
+      {plan && <aside className="storyboard" aria-label="分镜列表">
+        <div className="storyboard-title"><span>分镜卡片</span><small>不满意时只换当前画面</small></div>
+        <div className="scene-list">{plan.scenes.map((scene, index) => <article key={scene.id} className="scene-card">
+          <span className="scene-number">{String(index + 1).padStart(2, '0')}</span>
+          <span className="scene-type">{scene.visual.type === 'kinetic-text' ? <Sparkles size={14}/> : scene.visual.type === 'image' ? <Image size={14}/> : <Video size={14}/>}</span>
+          <div><b>{scene.script}</b><small>{(scene.startMs / 1000).toFixed(1)}–{(scene.endMs / 1000).toFixed(1)}s · {scene.visual.type}</small></div>
+          <button onClick={() => replaceScene(scene.id)} disabled={working || Boolean(replacingScene)}>{replacingScene === scene.id ? <Activity size={14}/> : <RefreshCw size={14}/>} 换画面</button>
+        </article>)}</div>
+      </aside>}
     </main>
+
+    {cloneOpen && <Modal title="克隆音色" subtitle="选择有权使用的参考音频，使用本机 Base 模型生成可复用音色" close={() => !cloneBusy && setCloneOpen(false)}>
+      <div className="settings-form">
+        <label className="clone-field">音色名称<input value={cloneName} maxLength={60} onChange={event => setCloneName(event.target.value)} placeholder="例如：我的旁白"/></label>
+        <label className="clone-field">参考音频<div><input readOnly value={cloneReference} placeholder="建议 5–20 秒清晰单人语音"/><button onClick={async () => { const selected = await api()?.chooseFile('audio'); if (selected) setCloneReference(selected); }}>选择音频</button></div></label>
+        {cloneError && <p className="field-error" role="alert">{cloneError}</p>}
+        <button className="modal-primary" disabled={cloneBusy || !cloneName.trim() || !cloneReference} onClick={createClone}>{cloneBusy ? '正在克隆…' : '创建并使用音色'}</button>
+      </div>
+    </Modal>}
 
     {libraryOpen && <Modal title="素材库" subtitle="整理画面、图片与声音，为下一条视频积累素材" close={() => setLibraryOpen(false)} wide>
       <LibraryPanel changed={async () => setAssets(await api()!.listAssets())}/>

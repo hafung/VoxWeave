@@ -13,6 +13,7 @@ try {
     window.__calls = [];
     window.voxweave = {
       getStatus: async () => ({ state: 'idle', backend: 'native', message: '本地引擎就绪' }),
+      listVoices: async () => [],
       listAssets: async () => assets, searchAssets: async (query, type) => assets.filter(asset => (!type || asset.type === type) && (!query || asset.name.includes(query) || asset.tags.includes(query))),
       resumeLastProject: async () => null, onCompositionProgress: () => () => {}, onExportProgress: () => () => {},
       pexelsStatus: async () => ({ configured: true }),
@@ -37,6 +38,12 @@ try {
   await mkdir('.windows-smoke/ui-check', { recursive: true });
   await page.screenshot({ path: '.windows-smoke/ui-check/library-desktop.png' });
   await page.click('.library-tabs button:nth-child(2)');
+  assert.equal(await page.$eval('.pexels-config', details => details.open), false);
+  await page.click('.pexels-config summary');
+  const keyControls = await page.$$eval('.pexels-key-row input,.pexels-key-row button', elements =>
+    elements.map(element => ({ top: element.getBoundingClientRect().top, bottom: element.getBoundingClientRect().bottom })));
+  assert.ok(keyControls.every(control => Math.abs(control.bottom - keyControls[0].bottom) <= 1));
+  await page.click('.pexels-config summary');
   await page.type('input[aria-label="搜索 Pexels 素材"]', '办公室');
   await page.click('button[type=submit]');
   await page.waitForFunction(() => document.body.textContent.includes('实际搜索词：office'));

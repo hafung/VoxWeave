@@ -26,7 +26,7 @@ import { ImportAssetRequestSchema, UpdateTagsSchema, SearchAssetsRequestSchema, 
 import { searchAssets } from './library/search.js';
 import { automaticTags } from './library/tags.js';
 import { PexelsClient, assertPexelsUrl } from './library/pexels.js';
-import { LANGUAGES, type AudioFormat, type CompositionProgressEvent, type GenerateCompositionRequest, type SynthesisRequest } from '../shared/types.js';
+import { LANGUAGES, type AudioFormat, type CompositionProgressEvent, type GenerateCompositionRequest, type SynthesisRequest, type VoiceProfile } from '../shared/types.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const devServerUrl = process.env.VITE_DEV_SERVER_URL;
@@ -35,7 +35,7 @@ if (process.env.VOXWEAVE_COMPOSITION_SMOKE_RESULT && process.env.VOXWEAVE_TEST_U
   app.setPath('userData', path.resolve(process.env.VOXWEAVE_TEST_USER_DATA));
 }
 
-interface Settings extends EngineConfig { lastProjectId?: string; pexelsKeyEncrypted?: string }
+interface Settings extends EngineConfig { lastProjectId?: string; pexelsKeyEncrypted?: string; voiceProfiles?: VoiceProfile[] }
 const settings = new Store<Settings>({ name: 'settings', defaults: {} });
 const audioJobs = new Map<string, QwenEngine>();
 const compositionJobs = new Map<string, { controller: AbortController; engine: QwenEngine }>();
@@ -360,6 +360,17 @@ if (cliMode) {
   });
 
   ipcMain.handle('engine:status', () => configuredEngine().status());
+  ipcMain.handle('voice:list', () => settings.get('voiceProfiles') ?? []);
+  ipcMain.handle('voice:clone', async (_event, value: unknown) => {
+    const input = z.object({ name: z.string().trim().min(1).max(60), referenceAudioPath: z.string().min(1) }).strict().parse(value);
+    const id = randomUUID();
+    const profile: VoiceProfile = { id, name: input.name, kind: 'clone',
+      path: path.join(app.getPath('userData'), 'voices', `${id}.qvoice`), createdAt: new Date().toISOString() };
+    await configuredEngine().createVoiceProfile(input.referenceAudioPath,
+      path.join(resourceRoot(), 'models', 'qwen3-tts-0.6b-base'), profile.path!);
+    settings.set('voiceProfiles', [...(settings.get('voiceProfiles') ?? []), profile]);
+    return profile;
+  });
   ipcMain.handle('engine:configure', async (_event, value: unknown) => {
     const config = z.object({ enginePath: z.string().optional(), modelDir: z.string().optional() }).strict().parse(value);
     if (config.enginePath !== undefined) settings.set('enginePath', config.enginePath);
@@ -391,6 +402,8 @@ if (cliMode) {
   });
   ipcMain.handle('composition:generate', (event, input: unknown) => {
     const request = GenerateCompositionRequestSchema.parse(input) as GenerateCompositionRequest;
+    const voiceProfile = (settings.get('voiceProfiles') ?? []).find(profile => profile.id === request.voiceId);
+    if (voiceProfile && (!voiceProfile.path || !existsSync(voiceProfile.path))) throw new Error('克隆音色文件不存在，请重新克隆');
     const { language: _language, temperature: _temperature, precision: _precision, ...draftRequest } = request;
     const plan = planDraft(draftRequest);
     const jobId = randomUUID();
@@ -407,7 +420,7 @@ if (cliMode) {
       const paths = configuredPaths();
       const narration = await new NarrationService({
         cacheDir: path.join(app.getPath('userData'), 'cache', 'narration'),
-        synthesizer: new QwenNarrationSynthesizer(engine), probe: mediaProbe,
+        synthesizer: new QwenNarrationSynthesizer(engine, voiceProfile?.path ? new Map([[voiceProfile.id, voiceProfile.path]]) : undefined), probe: mediaProbe,
         voice: {
           language: request.language ?? 'Chinese', temperature: request.temperature ?? 0.5,
           topK: 50, topP: 1, precision: request.precision ?? 'int8',
@@ -499,6 +512,8 @@ if (cliMode) {
     }
     return report;
   });
+  ipcMain.handle('library:import-file', (_event, value: unknown) =>
+    makeImporter().import(ImportAssetRequestSchema.parse({ filePath: z.string().min(1).parse(value) })));
   ipcMain.handle('library:list', () => library.list(10000));
   ipcMain.handle('library:search', (_event, query: unknown, type: unknown) => searchAssets(library,
     SearchAssetsRequestSchema.parse({ query, types: type ? [type] : ['video', 'image', 'audio'], limit: 100 })).map(result => result.asset));

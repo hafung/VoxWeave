@@ -6,6 +6,7 @@ release-*/
 .windows-tools/
 .windows-smoke/
 .windows-engine-build/
+.windows-stage-*/
 resources/models/*
 !resources/models/sensevoice-small/
 resources/models/sensevoice-small/*

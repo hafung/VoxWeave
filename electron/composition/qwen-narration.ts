@@ -3,7 +3,7 @@ import type { SynthesisRequest } from '../../shared/types.js';
 import type { NarrationSynthesizer, SegmentSynthesisInput } from './narration.js';
 
 export class QwenNarrationSynthesizer implements NarrationSynthesizer {
-  constructor(private readonly engine: QwenEngine) {}
+  constructor(private readonly engine: QwenEngine, private readonly voicePaths: ReadonlyMap<string, string> = new Map()) {}
 
   async synthesize(input: SegmentSynthesisInput): Promise<void> {
     const onAbort = () => this.engine.cancel();
@@ -14,7 +14,8 @@ export class QwenNarrationSynthesizer implements NarrationSynthesizer {
         outputPath: input.outputPath,
         outputFormat: 'wav',
         language: input.language as SynthesisRequest['language'],
-        speaker: input.voiceId,
+        speaker: this.voicePaths.has(input.voiceId) ? undefined : input.voiceId,
+        voicePath: this.voicePaths.get(input.voiceId),
         temperature: input.temperature,
         topK: input.topK,
         topP: input.topP,

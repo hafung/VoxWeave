@@ -67,6 +67,8 @@ export interface VoxWeaveApi {
   getStatus(): Promise<EngineStatus>;
   configure(config: { enginePath?: string; modelDir?: string }): Promise<EngineStatus>;
   chooseFile(kind: 'audio' | 'video' | 'engine' | 'model'): Promise<string | null>;
+  listVoices(): Promise<VoiceProfile[]>;
+  cloneVoice(input: { name: string; referenceAudioPath: string }): Promise<VoiceProfile>;
   chooseOutput(defaultName: string, format?: AudioFormat): Promise<string | null>;
   createDraftPlan(request: DraftPlanRequest): Promise<EditPlan>;
   generateComposition(request: GenerateCompositionRequest): Promise<{ jobId: string; projectId: string }>;
@@ -74,6 +76,7 @@ export interface VoxWeaveApi {
   resumeLastProject(): Promise<{ plan: EditPlan; preview?: CompositionProgressEvent['preview'] } | null>;
   replaceScene(projectId: string, sceneId: string): Promise<{ plan: EditPlan; preview: NonNullable<CompositionProgressEvent['preview']> }>;
   importAssets(): Promise<ImportReport>;
+  importAsset(filePath: string): Promise<MediaAsset>;
   listAssets(): Promise<MediaAsset[]>;
   searchAssets(query: string, type?: MediaAsset['type']): Promise<MediaAsset[]>;
   updateAssetTags(ids: string[], tags: string[], mode: 'replace' | 'append'): Promise<void>;
