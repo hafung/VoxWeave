@@ -45,4 +45,25 @@ describe('fixed composition compiler', () => {
   it('escapes HTML-significant characters', () => {
     expect(escapeHtml(`<script>"x" & 'y'</script>`)).toBe('&lt;script&gt;&quot;x&quot; &amp; &#39;y&#39;&lt;/script&gt;');
   });
+
+  it('renders adjacent narration sentences on one continuous video clip', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'voxweave-shared-shot-')); temporary.push(root);
+    const narrationPath = path.join(root, 'narration.wav'); await writeFile(narrationPath, wav());
+    const videoPath = path.join(root, 'city.mp4'); await writeFile(videoPath, 'video fixture');
+    const draft = createDraftEditPlan({ id: 'shared-shot', script: '你好。城市夜景。', voiceId: 'vivian' });
+    const resolved = resolveEditPlan(draft, { narration: { audioPath: narrationPath, durationMs: 4000,
+      segments: [
+        { id: 'scene-001', text: '你好。', startMs: 0, endMs: 2000, audioPath: narrationPath },
+        { id: 'scene-002', text: '城市夜景。', startMs: 2000, endMs: 4000, audioPath: narrationPath }
+      ] } });
+    const plan = { ...resolved, scenes: resolved.scenes.map((scene, index) => ({ ...scene, visual: {
+      ...scene.visual, type: 'video' as const, assetId: 'city', sourceInMs: index * 2000,
+      sourceOutMs: (index + 1) * 2000, motion: 'none' as const
+    } })) };
+    const prepared = await compileFixedTemplate(plan, path.join(root, 'preview'), () => videoPath);
+    const html = await readFile(prepared.entryUrl, 'utf8');
+    expect(html.match(/<video /gu)).toHaveLength(1);
+    expect(html).toContain('data-duration="4"');
+    expect(html).toContain('data-composition-id="voxweave-captions"');
+  });
 });

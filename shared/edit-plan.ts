@@ -94,7 +94,9 @@ export const EditPlanSchema = z.object({
   status: z.enum(['draft', 'resolved', 'rendering', 'complete', 'error']),
   input: z.object({
     script: z.string().trim().min(1).max(8000),
-    sourceVideoPath: nonEmptyPath.optional()
+    sourceVideoPath: nonEmptyPath.optional(),
+    visualBrief: z.string().trim().max(300).optional(),
+    storyKeywords: z.array(z.string().trim().min(1)).max(12).default([])
   }).strict(),
   canvas: CanvasSchema,
   template: z.object({
@@ -115,9 +117,15 @@ export const EditPlanSchema = z.object({
   bgm: z.object({
     enabled: z.boolean(),
     assetId: z.string().min(1).optional(),
-    volume: z.number().min(0).max(1),
+    volume: z.number().min(0).max(2),
     ducking: z.boolean()
   }).strict(),
+  audio: z.object({
+    narrationVolume: z.number().min(0).max(2),
+    originalEnabled: z.boolean(),
+    originalVolume: z.number().min(0).max(2),
+    originalDucking: z.boolean()
+  }).strict().default({ narrationVolume: 1, originalEnabled: false, originalVolume: 0.35, originalDucking: true }),
   output: z.object({
     format: z.literal('mp4'),
     videoCodec: z.enum(['h264', 'hevc']).default('h264'),
@@ -172,6 +180,7 @@ export const DraftPlanRequestSchema = z.object({
   script: z.string().trim().min(1).max(8000),
   voiceId: z.string().min(1),
   sourceVideoPath: nonEmptyPath.optional(),
+  visualBrief: z.string().trim().max(300).optional(),
   aspectRatio: z.enum(['9:16', '16:9', '1:1']).optional(),
   templateId: z.string().min(1).optional(),
   captionStyle: z.enum(['commerce-bold', 'opinion-clean', 'brand-minimal', 'info-card']).optional()
@@ -182,6 +191,7 @@ export type DraftPlanRequest = z.infer<typeof DraftPlanRequestSchema>;
 export type CreateDraftEditPlanInput = DraftPlanRequest & {
   id: string;
   keywords?: (text: string) => string[];
+  storyKeywords?: string[];
   now?: Date;
 };
 
@@ -255,7 +265,8 @@ export function createDraftEditPlan(input: CreateDraftEditPlanInput): EditPlan {
     createdAt: timestamp,
     updatedAt: timestamp,
     status: 'draft',
-    input: { script, sourceVideoPath: input.sourceVideoPath },
+    input: { script, sourceVideoPath: input.sourceVideoPath, visualBrief: input.visualBrief,
+      storyKeywords: input.storyKeywords?.slice(0, 12) ?? [] },
     canvas: { ...CANVASES[aspectRatio], fps: 30, background: '#0c0d10' },
     template: {
       id: input.templateId ?? 'voxweave-auto-v1',
@@ -271,6 +282,7 @@ export function createDraftEditPlan(input: CreateDraftEditPlanInput): EditPlan {
     scenes,
     captions: [],
     bgm: { enabled: false, volume: 0.13, ducking: true },
+    audio: { narrationVolume: 1, originalEnabled: false, originalVolume: 0.35, originalDucking: true },
     output: { format: 'mp4', videoCodec: 'h264', audioCodec: 'aac' }
   });
 }

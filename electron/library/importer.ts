@@ -60,7 +60,7 @@ export class AssetImporter {
     await mkdir(this.derivedDir, { recursive: true });
     const thumbnailPath = type === 'audio' || !this.thumbnailer ? undefined : path.join(this.derivedDir, `${id}.jpg`);
     if (thumbnailPath) await this.thumbnailer!.create(input.filePath, thumbnailPath, type);
-    const autoTags = automaticTags({ ...metadata, filePath: input.filePath, type, transcript: '' });
+    const autoTags = automaticTags({ ...metadata, filePath: input.filePath, type, transcript: '', license: input.license });
     return this.database.upsert(MediaAssetSchema.parse({
       id, filePath: path.resolve(input.filePath), fingerprint: hash, type,
       name: path.basename(input.filePath), durationMs: metadata.durationMs,

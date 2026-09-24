@@ -66,7 +66,9 @@ export interface GenerateCompositionRequest extends DraftPlanRequest {
 export interface VoxWeaveApi {
   getStatus(): Promise<EngineStatus>;
   configure(config: { enginePath?: string; modelDir?: string }): Promise<EngineStatus>;
-  chooseFile(kind: 'audio' | 'video' | 'engine' | 'model'): Promise<string | null>;
+  semanticStatus(): Promise<{ enginePath: string; modelPath: string; configured: boolean }>;
+  configureSemantic(config: { enginePath: string; modelPath: string }): Promise<{ enginePath: string; modelPath: string; configured: boolean }>;
+  chooseFile(kind: 'audio' | 'video' | 'engine' | 'model' | 'semantic-engine' | 'semantic-model'): Promise<string | null>;
   listVoices(): Promise<VoiceProfile[]>;
   cloneVoice(input: { name: string; referenceAudioPath: string }): Promise<VoiceProfile>;
   chooseOutput(defaultName: string, format?: AudioFormat): Promise<string | null>;
@@ -74,7 +76,11 @@ export interface VoxWeaveApi {
   generateComposition(request: GenerateCompositionRequest): Promise<{ jobId: string; projectId: string }>;
   cancelComposition(jobId: string): Promise<void>;
   resumeLastProject(): Promise<{ plan: EditPlan; preview?: CompositionProgressEvent['preview'] } | null>;
-  replaceScene(projectId: string, sceneId: string): Promise<{ plan: EditPlan; preview: NonNullable<CompositionProgressEvent['preview']> }>;
+  listSceneCandidates(projectId: string, sceneId: string, query?: string, throughSceneId?: string): Promise<SceneCandidateResult>;
+  replaceScene(projectId: string, sceneId: string, choice: SceneChoice): Promise<
+    | { status: 'replaced'; plan: EditPlan; preview: NonNullable<CompositionProgressEvent['preview']> }
+    | { status: 'unavailable'; message: string }
+  >;
   importAssets(): Promise<ImportReport>;
   importAsset(filePath: string): Promise<MediaAsset>;
   listAssets(): Promise<MediaAsset[]>;
@@ -87,7 +93,7 @@ export interface VoxWeaveApi {
   searchPexels(request: { query: string; type: 'video' | 'image'; page: number; orientation?: 'portrait' | 'landscape' | 'square' }): Promise<{ items: OnlineAsset[]; query: string }>;
   downloadPexels(id: string): Promise<MediaAsset>;
   openSource(url: string): Promise<void>;
-  updateBgm(projectId: string, bgm: EditPlan['bgm']): Promise<{ plan: EditPlan; preview: NonNullable<CompositionProgressEvent['preview']> }>;
+  updateAudio(projectId: string, settings: { bgm: EditPlan['bgm']; audio: EditPlan['audio'] }): Promise<{ plan: EditPlan; preview: NonNullable<CompositionProgressEvent['preview']> }>;
   exportVideo(projectId: string): Promise<{ jobId: string } | null>;
   cancelExport(jobId: string): Promise<void>;
   onExportProgress(listener: (event: ExportProgress) => void): () => void;
@@ -100,6 +106,7 @@ export interface VoxWeaveApi {
 }
 import type { DraftPlanRequest, EditPlan } from './edit-plan.js';
 import type { MediaAsset, ImportReport, OnlineAsset } from './library.js';
+import type { SceneCandidateResult, SceneChoice } from './scene-candidates.js';
 export interface ExportProgress {
   jobId: string; progress: number; phase: 'preparing' | 'capturing' | 'encoding' | 'complete' | 'error' | 'cancelled';
   message: string; outputPath?: string;

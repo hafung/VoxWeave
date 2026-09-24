@@ -17,14 +17,16 @@ import { HyperframesPreviewRenderer } from './renderers/hyperframes.js';
 import { PreviewRegistry } from './renderers/preview-registry.js';
 import { LibraryDatabase } from './library/database.js';
 import { AssetImporter, FfmpegThumbnailer } from './library/importer.js';
-import { replaceSceneAsset } from './library/replace-scene.js';
+import { NoReplacementAssetError, applySceneChoice, replaceSceneAsset } from './library/replace-scene.js';
+import { listSceneCandidates } from './library/scene-candidates.js';
+import { LocalLlamaEmbedder, SemanticReranker } from './library/semantic.js';
 import { selectBroll } from './library/selector.js';
 import { alignedCaptionCues } from './alignment/align-text.js';
 import { alignWithSenseVoiceProcess } from './alignment/sensevoice-process.js';
 import { DraftPlanRequestSchema, EditPlanSchema, type EditPlan } from '../shared/edit-plan.js';
 import { ImportAssetRequestSchema, UpdateTagsSchema, SearchAssetsRequestSchema, type ImportReport } from '../shared/library.js';
 import { searchAssets } from './library/search.js';
-import { automaticTags } from './library/tags.js';
+import { automaticTags, cleanAutomaticTags } from './library/tags.js';
 import { PexelsClient, assertPexelsUrl } from './library/pexels.js';
 import { LANGUAGES, type AudioFormat, type CompositionProgressEvent, type GenerateCompositionRequest, type SynthesisRequest, type VoiceProfile } from '../shared/types.js';
 
@@ -35,7 +37,10 @@ if (process.env.VOXWEAVE_COMPOSITION_SMOKE_RESULT && process.env.VOXWEAVE_TEST_U
   app.setPath('userData', path.resolve(process.env.VOXWEAVE_TEST_USER_DATA));
 }
 
-interface Settings extends EngineConfig { lastProjectId?: string; pexelsKeyEncrypted?: string; voiceProfiles?: VoiceProfile[] }
+interface Settings extends EngineConfig {
+  lastProjectId?: string; pexelsKeyEncrypted?: string; voiceProfiles?: VoiceProfile[];
+  semanticEnginePath?: string; semanticModelPath?: string; semanticEnabled?: boolean;
+}
 const settings = new Store<Settings>({ name: 'settings', defaults: {} });
 const audioJobs = new Map<string, QwenEngine>();
 const compositionJobs = new Map<string, { controller: AbortController; engine: QwenEngine }>();
@@ -82,6 +87,14 @@ function configuredPaths() {
     ffmpegPath: existsSync(bundledFfmpeg) ? bundledFfmpeg : process.env.VOXWEAVE_FFMPEG,
     ffprobePath: existsSync(bundledFfprobe) ? bundledFfprobe : process.env.VOXWEAVE_FFPROBE
   };
+}
+
+function semanticPaths(): { enginePath?: string; modelPath?: string } {
+  if (settings.get('semanticEnabled') === false) return {};
+  const root = path.join(resourceRoot(), 'semantic');
+  const enginePath = settings.get('semanticEnginePath') || path.join(root, 'runtime', 'llama-server.exe');
+  const modelPath = settings.get('semanticModelPath') || path.join(root, 'model', 'Qwen3-Embedding-0.6B-Q8_0.gguf');
+  return existsSync(enginePath) && existsSync(modelPath) ? { enginePath, modelPath } : {};
 }
 
 function configuredEngine(): QwenEngine {
@@ -322,6 +335,16 @@ if (cliMode) {
   const projectsRoot = path.join(app.getPath('userData'), 'projects');
   const editPlans = new EditPlanStore(projectsRoot);
   const library = new LibraryDatabase(path.join(app.getPath('userData'), 'library', 'assets.sqlite'));
+  const semanticEmbedder = new LocalLlamaEmbedder(semanticPaths);
+  const semanticReranker = new SemanticReranker(semanticEmbedder);
+  app.on('before-quit', () => semanticEmbedder.dispose());
+  for (const asset of library.list(10000)) {
+    if (asset.license.source !== 'pexels') continue;
+    const autoTags = [...new Set([...automaticTags(asset), ...cleanAutomaticTags(asset.autoTags)])];
+    if (JSON.stringify(autoTags) !== JSON.stringify(asset.autoTags)) {
+      library.upsert({ ...asset, autoTags, tags: [...new Set([...autoTags, ...asset.manualTags])] });
+    }
+  }
   const probePath = configuredPaths().ffprobePath;
   const mediaProbe = new FallbackMediaProbe(probePath ? new FfprobeMediaProbe(probePath) : undefined);
   const projectIdSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u);
@@ -377,8 +400,25 @@ if (cliMode) {
     if (config.modelDir !== undefined) settings.set('modelDir', config.modelDir);
     return configuredEngine().status();
   });
+  ipcMain.handle('semantic:status', () => ({
+    enginePath: semanticPaths().enginePath ?? settings.get('semanticEnginePath') ?? '',
+    modelPath: semanticPaths().modelPath ?? settings.get('semanticModelPath') ?? '',
+    configured: Boolean(semanticPaths().enginePath && semanticPaths().modelPath)
+  }));
+  ipcMain.handle('semantic:configure', (_event, value: unknown) => {
+    const config = z.object({ enginePath: z.string().trim().max(1000), modelPath: z.string().trim().max(1000) }).strict().parse(value);
+    if ((config.enginePath || config.modelPath) && (!existsSync(config.enginePath) || !existsSync(config.modelPath))) {
+      throw new Error('找不到 llama-server 或 embedding 模型文件');
+    }
+    semanticEmbedder.dispose();
+    semanticReranker.clear();
+    settings.set('semanticEnginePath', config.enginePath);
+    settings.set('semanticModelPath', config.modelPath);
+    settings.set('semanticEnabled', Boolean(config.enginePath && config.modelPath));
+    return { ...config, configured: Boolean(config.enginePath && config.modelPath) };
+  });
   ipcMain.handle('dialog:choose-file', async (_event, value: unknown) => {
-    const kind = z.enum(['audio', 'video', 'engine', 'model']).parse(value);
+    const kind = z.enum(['audio', 'video', 'engine', 'model', 'semantic-engine', 'semantic-model']).parse(value);
     if (kind === 'model') {
       const result = await dialog.showOpenDialog({ properties: ['openDirectory'], title: '选择 Qwen3-TTS 模型目录' });
       return result.canceled ? null : result.filePaths[0];
@@ -387,8 +427,10 @@ if (cliMode) {
       ? [{ name: '音频', extensions: ['wav', 'flac', 'mp3', 'ogg', 'opus', 'm4a', 'aac'] }]
       : kind === 'video'
         ? [{ name: '视频', extensions: ['mp4', 'mov', 'mkv', 'webm', 'avi', 'm4v'] }]
+        : kind === 'semantic-model' ? [{ name: 'GGUF 模型', extensions: ['gguf'] }]
+        : kind === 'semantic-engine' ? [{ name: 'llama-server', extensions: ['exe', 'bin', '*'] }]
         : [{ name: 'Qwen3-TTS 引擎', extensions: ['exe', 'bin', '*'] }];
-    const result = await dialog.showOpenDialog({ properties: ['openFile'], filters, title: kind === 'audio' ? '选择参考音频' : kind === 'video' ? '选择原始视频' : '选择 qwen_tts 引擎' });
+    const result = await dialog.showOpenDialog({ properties: ['openFile'], filters, title: kind === 'audio' ? '选择参考音频' : kind === 'video' ? '选择原始视频' : kind === 'semantic-model' ? '选择 embedding GGUF 模型' : kind === 'semantic-engine' ? '选择 llama-server 可执行文件' : '选择 qwen_tts 引擎' });
     return result.canceled ? null : result.filePaths[0];
   });
   ipcMain.handle('dialog:choose-output', async (_event, defaultName: string, format: AudioFormat = 'wav') => {
@@ -488,17 +530,37 @@ if (cliMode) {
     if (plan.output.outputPath) allowedShellPaths.add(path.resolve(plan.output.outputPath));
     return preparePreview(plan);
   });
-  ipcMain.handle('composition:replace-scene', async (_event, projectIdValue: unknown, sceneIdValue: unknown) => {
+  ipcMain.handle('composition:scene-candidates', async (_event, projectIdValue: unknown, sceneIdValue: unknown, queryValue: unknown, throughSceneIdValue: unknown) => {
+    const projectId = projectIdSchema.parse(projectIdValue);
+    const sceneId = z.string().min(1).max(160).parse(sceneIdValue);
+    const query = z.string().trim().max(150).default('').parse(queryValue);
+    const throughSceneId = z.string().min(1).max(160).optional().parse(throughSceneIdValue);
+    const plan = await editPlans.read(projectId);
+    return listSceneCandidates(plan, sceneId, library, { query, throughSceneId, ffmpegPath: configuredPaths().ffmpegPath,
+      semantic: semanticPaths().enginePath ? semanticReranker : undefined });
+  });
+  ipcMain.handle('composition:replace-scene', async (_event, projectIdValue: unknown, sceneIdValue: unknown, choiceValue: unknown) => {
     const projectId = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u).parse(projectIdValue);
     const sceneId = z.string().min(1).max(160).parse(sceneIdValue);
     if (projectLocks.has(projectId)) throw new Error('工程正在导出或更新，请稍后再试');
     projectLocks.add(projectId);
     try {
     const plan = await editPlans.read(projectId);
-    const updated = replaceSceneAsset({ ...plan, status: plan.status === 'complete' ? 'resolved' : plan.status }, sceneId, library);
+    let updated: EditPlan;
+    try {
+      const resolved = { ...plan, status: plan.status === 'complete' ? 'resolved' as const : plan.status };
+      const choice = choiceValue === undefined ? undefined : z.discriminatedUnion('type', [
+        z.object({ type: z.literal('asset'), assetId: z.string().min(1).max(160), sourceInMs: z.number().int().nonnegative().optional(), throughSceneId: z.string().min(1).max(160).optional() }).strict(),
+        z.object({ type: z.literal('kinetic-text'), throughSceneId: z.string().min(1).max(160).optional() }).strict()
+      ]).parse(choiceValue);
+      updated = choice ? applySceneChoice(resolved, sceneId, choice, library) : replaceSceneAsset(resolved, sceneId, library);
+    } catch (error) {
+      if (error instanceof NoReplacementAssetError) return { status: 'unavailable' as const, message: error.message };
+      throw error;
+    }
     updated.output.outputPath = undefined;
     const result = await preparePreview(updated); await editPlans.save(updated);
-    return result;
+    return { status: 'replaced' as const, ...result };
     } finally { projectLocks.delete(projectId); }
   });
   ipcMain.handle('library:import', async () => {
@@ -528,7 +590,7 @@ if (cliMode) {
   ipcMain.handle('library:auto-tags', (_event, values: unknown) => {
     for (const id of idsSchema.parse(values)) {
       const asset = library.byId(id); if (!asset) continue;
-      const autoTags = [...new Set([...automaticTags(asset), ...(asset.license.source === 'pexels' ? asset.autoTags : [])])];
+      const autoTags = [...new Set([...automaticTags(asset), ...(asset.license.source === 'pexels' ? cleanAutomaticTags(asset.autoTags) : [])])];
       library.upsert({ ...asset, autoTags, tags: [...new Set([...autoTags, ...asset.manualTags])] });
     }
   });
@@ -555,14 +617,15 @@ if (cliMode) {
     } catch (error) { await rm(filePath, { force: true }); throw error; }
   });
   ipcMain.handle('library:open-source', (_event, value: unknown) => shell.openExternal(assertPexelsUrl(z.string().url().parse(value), 'page')));
-  ipcMain.handle('composition:bgm', async (_event, idValue: unknown, value: unknown) => {
+  ipcMain.handle('composition:audio', async (_event, idValue: unknown, value: unknown) => {
     const id = projectIdSchema.parse(idValue);
     if (projectLocks.has(id)) throw new Error('工程正在处理，请稍后再试');
     projectLocks.add(id);
     try {
       const plan = await editPlans.read(id);
       if (!['resolved', 'complete'].includes(plan.status)) throw new Error('请先生成预览');
-      const candidate = EditPlanSchema.parse({ ...plan, bgm: value, status: 'resolved', revision: plan.revision + 1,
+      const settings = z.object({ bgm: EditPlanSchema.shape.bgm, audio: EditPlanSchema.shape.audio }).strict().parse(value);
+      const candidate = EditPlanSchema.parse({ ...plan, bgm: settings.bgm, audio: settings.audio, status: 'resolved', revision: plan.revision + 1,
         updatedAt: new Date().toISOString(), output: { ...plan.output, outputPath: undefined } });
       if (candidate.bgm.enabled) {
         const asset = candidate.bgm.assetId && library.byId(candidate.bgm.assetId);

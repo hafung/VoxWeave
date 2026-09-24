@@ -123,6 +123,25 @@ async function main() {
     }
   }
 
+  const semanticModel = path.join(root, 'semantic/model');
+  const semanticRuntime = path.join(root, 'semantic/runtime');
+  const semanticPresent = await Promise.all([semanticModel, semanticRuntime].map(directory =>
+    stat(directory).then(info => info.isDirectory()).catch(() => false)));
+  if (semanticPresent.some(Boolean)) {
+    for (const relative of [
+      'semantic/manifest.json',
+      'semantic/model/Qwen3-Embedding-0.6B-Q8_0.gguf',
+      'semantic/runtime/llama-server.exe',
+      'semantic/runtime/llama-server-impl.dll',
+      'semantic/LLAMA-LICENSE.txt',
+      'semantic/QWEN-LICENSE.txt'
+    ]) {
+      try {
+        if (!(await stat(path.join(root, relative))).isFile()) missing.push(relative);
+      } catch { missing.push(relative); }
+    }
+  }
+
   if (missing.length) {
     console.error(`Offline resource closure is incomplete (${missing.length} missing):`);
     for (const relative of missing) console.error(`  - ${relative}`);
@@ -134,7 +153,8 @@ async function main() {
     ...await verifyDeclaredHashes(root, 'models/qwen3-tts-0.6b-customvoice/manifest.json'),
     ...await verifyDeclaredHashes(root, 'models/qwen3-tts-0.6b-base/manifest.json'),
     ...await verifyDeclaredHashes(root, 'models/sensevoice-small/manifest.json'),
-    ...await verifyDeclaredHashes(root, 'ffmpeg/manifest.json')
+    ...await verifyDeclaredHashes(root, 'ffmpeg/manifest.json'),
+    ...await verifyDeclaredHashes(root, 'semantic/manifest.json')
   ];
   if (hashFailures.length) {
     console.error('Offline resource hash verification failed:');

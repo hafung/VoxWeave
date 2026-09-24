@@ -79,11 +79,23 @@ export async function compileFixedTemplate(
   const copied = new Map<string, string>();
   const visuals: string[] = [];
   const kinetics: string[] = [];
-  for (const [index, scene] of plan.scenes.entries()) {
+  for (let index = 0; index < plan.scenes.length; index++) {
+    const scene = plan.scenes[index];
     const duration = scene.endMs - scene.startMs;
     if (scene.visual.type === 'kinetic-text') {
       kinetics.push(kineticMarkup(scene.script, scene.startMs, duration, index));
       continue;
+    }
+    let last = index;
+    while (last + 1 < plan.scenes.length) {
+      const previous = plan.scenes[last];
+      const next = plan.scenes[last + 1];
+      if (next.startMs !== previous.endMs || next.visual.type !== scene.visual.type ||
+        next.visual.assetId !== scene.visual.assetId || next.visual.fit !== scene.visual.fit ||
+        next.visual.motion !== scene.visual.motion) break;
+      if (scene.visual.type !== 'image' && (next.visual.sourceInMs ?? 0) !==
+        (previous.visual.sourceOutMs ?? (previous.visual.sourceInMs ?? 0) + previous.endMs - previous.startMs)) break;
+      last++;
     }
     const assetId = scene.visual.assetId;
     if (!assetId) throw new Error(`分镜 ${scene.id} 缺少素材 ID`);
@@ -97,7 +109,8 @@ export async function compileFixedTemplate(
     const tag = scene.visual.type === 'image' ? 'img' : 'video';
     const mediaStart = scene.visual.sourceInMs ? ` data-media-start="${seconds(scene.visual.sourceInMs)}"` : '';
     const mediaAttributes = tag === 'video' ? ' muted playsinline' : '';
-    visuals.push(`<${tag} id="visual-${index}" class="clip visual ${scene.visual.fit}" src="./${escapeHtml(relative)}" preload="auto" data-start="${seconds(scene.startMs)}" data-duration="${seconds(duration)}"${mediaStart} data-track-index="1"${mediaAttributes}></${tag}>`);
+    visuals.push(`<${tag} id="visual-${index}" class="clip visual ${scene.visual.fit}" src="./${escapeHtml(relative)}" preload="auto" data-start="${seconds(scene.startMs)}" data-duration="${seconds(plan.scenes[last].endMs - scene.startMs)}"${mediaStart} data-track-index="1"${mediaAttributes}></${tag}>`);
+    index = last;
   }
 
   const durationSeconds = seconds(plan.narration.durationMs);

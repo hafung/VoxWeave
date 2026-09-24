@@ -25,6 +25,8 @@
     "smoke:composition:win": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-composition-windows.ps1",
     "smoke:export:win": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-export-windows.ps1",
     "smoke:library:ui": "node scripts/smoke-library-ui.mjs",
+    "smoke:scene-picker:ui": "node scripts/smoke-scene-picker-ui.mjs",
+    "smoke:semantic:win": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-semantic-windows.ps1",
     "smoke:package:win": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-packaged-windows.ps1",
     "package:win": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-windows-offline.ps1",
     "package:win:installer": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-windows-offline.ps1 -IncludeSetup"

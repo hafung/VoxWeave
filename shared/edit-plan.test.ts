@@ -39,4 +39,12 @@ describe('EditPlanSchema', () => {
     const plan = createDraftEditPlan({ id: 'plan-3', script: '准备生成。', voiceId: 'vivian' });
     expect(EditPlanSchema.safeParse({ ...plan, status: 'resolved' }).success).toBe(false);
   });
+
+  it('keeps old projects muted by default and persists independent track levels', () => {
+    const plan = createDraftEditPlan({ id: 'audio', script: '保留现场声音。', voiceId: 'vivian', sourceVideoPath: 'source.mp4' });
+    const { audio: _oldField, ...oldPlan } = plan;
+    expect(EditPlanSchema.parse(oldPlan).audio).toEqual({ narrationVolume: 1, originalEnabled: false, originalVolume: .35, originalDucking: true });
+    expect(EditPlanSchema.parse({ ...plan, audio: { narrationVolume: .8, originalEnabled: true, originalVolume: .5, originalDucking: false } }).audio.originalEnabled).toBe(true);
+    expect(EditPlanSchema.safeParse({ ...plan, audio: { ...plan.audio, originalVolume: 2.1 } }).success).toBe(false);
+  });
 });

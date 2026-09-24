@@ -112,4 +112,14 @@ describe('offline resource verifier', () => {
       path.resolve('scripts/verify-offline-resources.mjs'), '--root', root
     ])).rejects.toMatchObject({ code: 1 });
   });
+
+  it('rejects an incomplete optional semantic pack', async () => {
+    const root = await fixture();
+    const model = path.join(root, 'semantic/model/Qwen3-Embedding-0.6B-Q8_0.gguf');
+    await mkdir(path.dirname(model), { recursive: true });
+    await writeFile(model, 'partial model');
+    await expect(execFileAsync(process.execPath, [
+      path.resolve('scripts/verify-offline-resources.mjs'), '--root', root
+    ])).rejects.toMatchObject({ code: 1 });
+  });
 });

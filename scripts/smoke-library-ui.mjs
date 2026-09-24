@@ -13,6 +13,7 @@ try {
     window.__calls = [];
     window.voxweave = {
       getStatus: async () => ({ state: 'idle', backend: 'native', message: '本地引擎就绪' }),
+      semanticStatus: async () => ({ enginePath: '', modelPath: '', configured: false }),
       listVoices: async () => [],
       listAssets: async () => assets, searchAssets: async (query, type) => assets.filter(asset => (!type || asset.type === type) && (!query || asset.name.includes(query) || asset.tags.includes(query))),
       resumeLastProject: async () => null, onCompositionProgress: () => () => {}, onExportProgress: () => () => {},

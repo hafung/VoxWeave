@@ -21,10 +21,18 @@ export class HyperframesPreviewRenderer implements VideoRenderer {
       const bgm = plan.bgm.enabled && plan.bgm.assetId && this.resolveAsset
         ? { path: await this.resolveAsset(plan.bgm.assetId), volume: plan.bgm.volume, ducking: plan.bgm.ducking } : undefined;
       if (plan.bgm.enabled && plan.bgm.assetId && !bgm) throw new Error('请选择有效的配乐素材');
-      await mixNarration(this.tools.ffmpegPath, plan.narration.audioPath, mixed, plan.narration.durationMs, bgm);
+      let original: { path: string; volume: number; ducking: boolean } | undefined;
+      if (plan.audio.originalEnabled) {
+        if (!plan.input.sourceVideoPath) throw new Error('工程没有原始视频，无法保留原声');
+        const metadata = await new FfprobeMediaProbe(this.tools.ffprobePath).probe(plan.input.sourceVideoPath);
+        if (!metadata.hasAudio) throw new Error('原始视频没有音轨，无法保留原声');
+        original = { path: plan.input.sourceVideoPath, volume: plan.audio.originalVolume, ducking: plan.audio.originalDucking };
+      }
+      await mixNarration(this.tools.ffmpegPath, plan.narration.audioPath, mixed, plan.narration.durationMs,
+        { narrationVolume: plan.audio.narrationVolume, original, bgm });
       return compileFixedTemplate({ ...plan, narration: { ...plan.narration, audioPath: mixed } }, workspace, this.resolveAsset);
     }
-    if (plan.bgm.enabled && plan.bgm.assetId) throw new Error('配乐混音需要 FFmpeg');
+    if (plan.bgm.enabled && plan.bgm.assetId || plan.audio.originalEnabled || plan.audio.narrationVolume !== 1) throw new Error('音轨混音需要 FFmpeg');
     return compileFixedTemplate(plan, workspace, this.resolveAsset);
   }
 

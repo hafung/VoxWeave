@@ -30,6 +30,9 @@ resources/ffmpeg/*
 !resources/ffmpeg/manifest.json
 resources/offline-manifest.json
 resources/browser/chrome-headless-shell-win64/
+resources/semantic/model/
+resources/semantic/runtime/
+resources/semantic/manifest.json
 engine/qwen3-tts-c/*.o
 engine/qwen3-tts-c/*.d
 engine/qwen3-tts-c/*.exe

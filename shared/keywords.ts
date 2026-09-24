@@ -1,6 +1,6 @@
 // Small, editable bilingual vocabulary. Unknown terms are preserved for manual searches.
 export const KEYWORD_GROUPS = [
-  ['自然', 'nature'], ['城市', 'city', 'urban'], ['海洋', '大海', '海边', 'ocean', 'sea', 'beach'],
+  ['自然', 'nature'], ['城市', 'city', 'urban'], ['夜景', '夜晚', '夜间', 'night'], ['白天', '日间', 'daytime'], ['海洋', '大海', '海边', 'ocean', 'sea', 'beach'],
   ['森林', '树林', 'forest', 'woods'], ['山', '山脉', 'mountain'], ['天空', 'sky'], ['日落', '夕阳', 'sunset'],
   ['工作', '办公', '办公室', 'office', 'work'], ['团队', '合作', 'team', 'teamwork'], ['会议', 'meeting'],
   ['科技', '技术', 'technology', 'tech'], ['电脑', 'computer', 'laptop'], ['手机', 'phone', 'smartphone'],
