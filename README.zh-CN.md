@@ -111,6 +111,8 @@ pnpm smoke:package:win -PackageDir .\release-test\VoxWeave-Portable-0.2.2-x64 -W
 
 此脚本默认使用 `C:\Users\admin\.cache\codex-runtimes\codex-primary-runtime\dependencies\node` 下的运行时；换机器时通过 `-NodePath` 与 `-PnpmCliPath` 指定其他路径。已存在同版本包时，会在同一输出目录中自动递增补丁版本号（如 `0.2.2` → `0.2.3`），不覆盖旧包。版本号仅写入临时 staging 中的 `package.json`，不修改源码版本；手动指定 `-ReleaseDir` 时也适用。
 
+打包时会优先复用当前 Windows 用户 `%LOCALAPPDATA%\electron\Cache` 中与依赖版本匹配的 Electron x64 ZIP，避免重复下载；缓存中没有时仍会正常下载。
+
 开发 CLI 时，需要指定兼容的引擎、模型和 FFmpeg：
 
 ```powershell

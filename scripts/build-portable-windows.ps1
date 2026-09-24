@@ -32,7 +32,7 @@ $previousPath = $env:PATH
 
 try {
   New-Item -ItemType Directory -Path $stageRoot | Out-Null
-  foreach ($item in @('src', 'electron', 'shared', 'cli', 'scripts', 'package.json', 'pnpm-lock.yaml',
+  foreach ($item in @('src', 'electron', 'shared', 'cli', 'scripts', 'build', 'package.json', 'pnpm-lock.yaml',
       'pnpm-workspace.yaml', 'tsconfig.json', 'tsconfig.electron.json', 'vite.config.ts',
       'index.html', 'LICENSE', 'LICENSES.md')) {
     Copy-Item -LiteralPath (Join-Path $sourceRoot $item) -Destination $stageRoot -Recurse -Force

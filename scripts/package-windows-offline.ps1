@@ -50,6 +50,21 @@ try {
   if (-not (Test-Path -LiteralPath $builderCli -PathType Leaf)) { throw "electron-builder CLI not found: $builderCli" }
   $package.build.directories.output = $buildDir
   $package.build.extraResources[0].from = $resourceRoot
+  if (-not $package.build.electronDist -and $env:LOCALAPPDATA) {
+    $electronPackagePath = Join-Path $projectDir 'node_modules\electron\package.json'
+    $electronCacheRoot = Join-Path $env:LOCALAPPDATA 'electron\Cache'
+    if ((Test-Path -LiteralPath $electronPackagePath -PathType Leaf) -and
+        (Test-Path -LiteralPath $electronCacheRoot -PathType Container)) {
+      $electronVersion = (Get-Content $electronPackagePath -Raw -Encoding UTF8 | ConvertFrom-Json).version
+      $electronArchiveName = "electron-v$electronVersion-win32-$arch.zip"
+      $electronArchive = Get-ChildItem -LiteralPath $electronCacheRoot -Recurse -File -Filter $electronArchiveName |
+        Select-Object -First 1
+      if ($electronArchive) {
+        $package.build | Add-Member -NotePropertyName electronDist -NotePropertyValue $electronArchive.FullName
+        Write-Host "Reusing cached Electron archive: $($electronArchive.FullName)"
+      }
+    }
+  }
   $builderConfig = Join-Path ([IO.Path]::GetTempPath()) ('voxweave-builder-' + [guid]::NewGuid().ToString('N') + '.json')
   [IO.File]::WriteAllText($builderConfig, ($package.build | ConvertTo-Json -Depth 20), (New-Object Text.UTF8Encoding($false)))
   & $nodePath $builderCli --win $builderTarget --x64 --config $builderConfig
