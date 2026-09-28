@@ -138,6 +138,10 @@ export function App() {
   useEffect(() => {
     const player = playerRef.current;
     if (!player) return;
+    // The player package draws an asymmetric play glyph; keep its controls and center the icon.
+    const playIcon = player.shadowRoot?.querySelector<SVGSVGElement>('.hfp-play-btn .hfp-ico-play svg');
+    playIcon?.setAttribute('viewBox', '0 0 24 24');
+    playIcon?.querySelector('path')?.setAttribute('d', 'M7 4.5a1.5 1.5 0 0 1 2.3-1.27l11.25 7.5a1.5 1.5 0 0 1 0 2.54l-11.25 7.5A1.5 1.5 0 0 1 7 19.5v-15Z');
     const ready = () => setPreviewError(undefined);
     const failed = (event: Event) => setPreviewError((event as CustomEvent<{ message?: string }>).detail?.message ?? '预览加载失败');
     player.addEventListener('ready', ready); player.addEventListener('error', failed);
