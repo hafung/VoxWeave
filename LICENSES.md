@@ -4,7 +4,7 @@ VoxWeave application code is provided under the MIT License.
 
 The optional inference backend is [gabriele-mastrapasqua/qwen3-tts](https://github.com/gabriele-mastrapasqua/qwen3-tts), Copyright (c) 2025 Gabriele Mastrapasqua, licensed under the MIT License.
 
-Qwen3-TTS 0.6B CustomVoice and Base model weights are published by the Qwen team under Apache License 2.0. The offline resource directory keeps each model at a pinned revision with its own manifest and Apache notice; CustomVoice is the default for the preset narration voices, while Base is retained for voice cloning.
+Qwen3-TTS 1.7B CustomVoice and Base model weights are published by the Qwen team under Apache License 2.0. The offline resource directory keeps both models at pinned revisions with their own manifests and Apache notices. Base extracts cloned voice profiles; CustomVoice reads both preset and cloned voices through the native engine's cross-model voice support.
 
 OpenBLAS is Copyright (c) 2011-2014, The OpenBLAS Project, and is distributed under the BSD 3-Clause License. The reviewed Windows engine bundle includes OpenBLAS 0.3.34, LLVM-MinGW winpthreads, LZ4 notices, the required DLLs, and hash-verified build metadata under `resources/engine/`.
 

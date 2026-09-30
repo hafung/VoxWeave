@@ -25,7 +25,8 @@ export async function alignWithSenseVoiceProcess(
   resources: string,
   audioPath: string,
   executable = process.execPath,
-  workerPath = fileURLToPath(new URL('./sensevoice-worker.js', import.meta.url))
+  workerPath = fileURLToPath(new URL('./sensevoice-worker.js', import.meta.url)),
+  signal?: AbortSignal
 ): Promise<SenseVoiceProcessResult> {
   const temp = await mkdtemp(path.join(os.tmpdir(), 'voxweave-sensevoice-'));
   const resultPath = path.join(temp, 'result.json');
@@ -33,10 +34,12 @@ export async function alignWithSenseVoiceProcess(
     await execFileAsync(executable, [workerPath, '--resources', resources, '--audio', audioPath, '--result', resultPath], {
       env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
       windowsHide: true,
+      signal,
       maxBuffer: 4 * 1024 * 1024
     });
     return WorkerResultSchema.parse(JSON.parse(await readFile(resultPath, 'utf8')));
   } catch (error) {
+    if (signal?.aborted) throw new DOMException('字幕对齐已取消', 'AbortError');
     const detail = error && typeof error === 'object' && 'stderr' in error ? String(error.stderr).trim() : '';
     throw new Error(`SenseVoice 隔离进程失败${detail ? `：${detail}` : ''}`, { cause: error });
   } finally {

@@ -45,6 +45,7 @@ function encodeWav(wav: PcmWav): Buffer {
 export async function composeWav(parts: Array<{ path?: string; pauseMs?: number }>, outputPath: string): Promise<void> {
   let format: Omit<PcmWav, 'data'> | undefined;
   const chunks: Buffer[] = [];
+  let leadingPauseMs = 0;
   for (const part of parts) {
     if (part.path) {
       const wav = decodeWav(await readFile(part.path));
@@ -52,12 +53,78 @@ export async function composeWav(parts: Array<{ path?: string; pauseMs?: number 
       if (wav.sampleRate !== format.sampleRate || wav.channels !== format.channels || wav.bitsPerSample !== format.bitsPerSample) {
         throw new Error('合成片段的采样格式不一致');
       }
+      if (leadingPauseMs) {
+        const frames = Math.round(format.sampleRate * leadingPauseMs / 1000);
+        chunks.push(Buffer.alloc(frames * format.channels * format.bitsPerSample / 8));
+        leadingPauseMs = 0;
+      }
       chunks.push(wav.data);
     } else if (part.pauseMs && format) {
       const length = Math.round(format.sampleRate * format.channels * (format.bitsPerSample / 8) * part.pauseMs / 1000);
       chunks.push(Buffer.alloc(length - (length % (format.channels * format.bitsPerSample / 8))));
-    }
+    } else if (part.pauseMs) leadingPauseMs += part.pauseMs;
   }
   if (!format) throw new Error('没有可写入的语音片段');
   await writeFile(outputPath, encodeWav({ ...format, data: Buffer.concat(chunks) }));
+}
+
+export interface WavTiming { durationMs: number; speechStartMs: number; speechEndMs: number }
+
+/** Conservative energy bounds used only for padding/estimated captions, never to cut speech. */
+export async function readWavTiming(file: string): Promise<WavTiming> {
+  const wav = decodeWav(await readFile(file));
+  const frameBytes = wav.channels * wav.bitsPerSample / 8;
+  const frames = Math.floor(wav.data.length / frameBytes);
+  const durationMs = frames * 1000 / wav.sampleRate;
+  if (wav.bitsPerSample !== 16) return { durationMs, speechStartMs: 0, speechEndMs: durationMs };
+  const windowFrames = Math.max(1, Math.round(wav.sampleRate / 100));
+  const energies: number[] = [];
+  for (let start = 0; start < frames; start += windowFrames) {
+    let sum = 0;
+    const end = Math.min(frames, start + windowFrames);
+    for (let frame = start; frame < end; frame++) {
+      for (let channel = 0; channel < wav.channels; channel++) {
+        const sample = wav.data.readInt16LE(frame * frameBytes + channel * 2) / 32768;
+        sum += sample * sample;
+      }
+    }
+    energies.push(Math.sqrt(sum / Math.max(1, (end - start) * wav.channels)));
+  }
+  const peak = energies.reduce((maximum, value) => Math.max(maximum, value), 0);
+  const threshold = Math.max(0.001, peak * 0.015);
+  const first = energies.findIndex(value => value > threshold);
+  let last = energies.length - 1;
+  while (last >= 0 && energies[last] <= threshold) last--;
+  if (first < 0) return { durationMs, speechStartMs: 0, speechEndMs: durationMs };
+  return {
+    durationMs,
+    speechStartMs: Math.max(0, Math.round(first * windowFrames * 1000 / wav.sampleRate) - 20),
+    speechEndMs: Math.min(durationMs, Math.round((last + 1) * windowFrames * 1000 / wav.sampleRate) + 20)
+  };
+}
+
+export async function composeSpeechWav(
+  clips: Array<{ path: string; pauseBeforeMs?: number; pauseAfterMs: number }>, outputPath: string
+): Promise<Array<WavTiming & { startMs: number; endMs: number }>> {
+  const timing = await Promise.all(clips.map(clip => readWavTiming(clip.path)));
+  const parts: Array<{ path?: string; pauseMs?: number }> = [];
+  const intervals: Array<WavTiming & { startMs: number; endMs: number }> = [];
+  let cursor = 0;
+  for (const [index, clip] of clips.entries()) {
+    const before = clip.pauseBeforeMs ?? 0;
+    if (before) { parts.push({ pauseMs: before }); cursor += before; }
+    const current = timing[index];
+    const nextLeading = timing[index + 1]?.speechStartMs ?? 0;
+    const naturalGap = current.durationMs - current.speechEndMs + nextLeading;
+    // Existing TTS silence already contributes to the paragraph break.
+    const padding = Math.max(0, Math.ceil(clip.pauseAfterMs - naturalGap));
+    parts.push({ path: clip.path });
+    if (padding) parts.push({ pauseMs: padding });
+    const startMs = cursor;
+    cursor += current.durationMs + padding;
+    intervals.push({ durationMs: Math.round(current.durationMs), startMs: Math.round(startMs), endMs: Math.round(cursor),
+      speechStartMs: Math.round(startMs + current.speechStartMs), speechEndMs: Math.round(startMs + current.speechEndMs) });
+  }
+  await composeWav(parts, outputPath);
+  return intervals;
 }

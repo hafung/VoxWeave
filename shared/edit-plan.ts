@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { estimateDuration, parseMarkedText } from './markup.js';
+import { estimateDuration } from './markup.js';
+import { planSpeech } from './prosody.js';
 
 export const EDIT_PLAN_SCHEMA_VERSION = 1 as const;
 
@@ -80,10 +81,25 @@ export const NarrationSegmentSchema = z.object({
   text: z.string().min(1),
   startMs: milliseconds,
   endMs: milliseconds,
-  audioPath: nonEmptyPath.optional()
+  audioPath: nonEmptyPath.optional(),
+  sceneIds: z.array(z.string().min(1)).min(1).optional(),
+  speechStartMs: milliseconds.optional(),
+  speechEndMs: milliseconds.optional()
 }).strict().refine(segment => segment.endMs > segment.startMs, {
   message: '旁白分段结束时间必须晚于开始时间', path: ['endMs']
+}).superRefine((segment, context) => {
+  const start = segment.speechStartMs ?? segment.startMs;
+  const end = segment.speechEndMs ?? segment.endMs;
+  if (start < segment.startMs || end > segment.endMs || end <= start) {
+    context.addIssue({ code: 'custom', message: '语音区间必须位于旁白分段内', path: ['speechEndMs'] });
+  }
 });
+
+export const NarrationChunkSchema = z.object({
+  id: z.string().min(1), text: z.string().min(1),
+  sceneIds: z.array(z.string().min(1)).min(1),
+  pauseBeforeMs: milliseconds.max(10_000), pauseAfterMs: milliseconds.max(10_000)
+}).strict();
 
 export const EditPlanSchema = z.object({
   schemaVersion: z.literal(EDIT_PLAN_SCHEMA_VERSION),
@@ -110,7 +126,8 @@ export const EditPlanSchema = z.object({
     audioPath: nonEmptyPath.optional(),
     estimatedDurationMs: z.number().int().positive(),
     durationMs: z.number().int().positive().optional(),
-    segments: z.array(NarrationSegmentSchema)
+    segments: z.array(NarrationSegmentSchema),
+    chunks: z.array(NarrationChunkSchema).optional()
   }).strict(),
   scenes: z.array(SceneSchema).min(1),
   captions: z.array(CaptionCueSchema),
@@ -201,14 +218,6 @@ const CANVASES = {
   '1:1': { width: 1080, height: 1080 }
 } as const;
 
-function splitSpeech(script: string): string[] {
-  return parseMarkedText(script)
-    .filter(segment => segment.kind === 'speech')
-    .flatMap(segment => segment.text.split(/(?<=[。！？!?；;])|\n+/u))
-    .map(segment => segment.trim())
-    .filter(Boolean);
-}
-
 function orientationFor(aspectRatio: NonNullable<CreateDraftEditPlanInput['aspectRatio']>): VisualIntent['orientation'] {
   if (aspectRatio === '9:16') return 'portrait';
   if (aspectRatio === '16:9') return 'landscape';
@@ -217,11 +226,13 @@ function orientationFor(aspectRatio: NonNullable<CreateDraftEditPlanInput['aspec
 
 export function createDraftEditPlan(input: CreateDraftEditPlanInput): EditPlan {
   const script = input.script.trim();
-  const chunks = splitSpeech(script);
+  const speech = planSpeech(script);
+  const chunks = speech.flatMap(chunk => chunk.sentences);
   if (chunks.length === 0) throw new Error('请输入有效文案');
 
   const aspectRatio = input.aspectRatio ?? '9:16';
-  const estimatedDurationMs = Math.max(1000, chunks.length, Math.round(estimateDuration(script) * 1000));
+  const estimatedDurationMs = Math.max(1000, chunks.length, Math.round(estimateDuration(speech.map(chunk => chunk.text).join(' ')) * 1000)
+    + speech.reduce((sum, chunk) => sum + chunk.pauseBeforeMs + chunk.pauseAfterMs, 0));
   const weights = chunks.map(chunk => Math.max(1, Array.from(chunk).length));
   const totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
   const sourceType = input.sourceVideoPath ? 'source' as const : 'kinetic-text' as const;
@@ -258,6 +269,12 @@ export function createDraftEditPlan(input: CreateDraftEditPlanInput): EditPlan {
   });
 
   const timestamp = (input.now ?? new Date()).toISOString();
+  let sceneIndex = 0;
+  const narrationChunks = speech.map((chunk, index) => ({
+    id: `speech-${String(index + 1).padStart(3, '0')}`, text: chunk.text,
+    sceneIds: chunk.sentences.map(() => scenes[sceneIndex++].id),
+    pauseBeforeMs: chunk.pauseBeforeMs, pauseAfterMs: chunk.pauseAfterMs
+  }));
   return EditPlanSchema.parse({
     schemaVersion: EDIT_PLAN_SCHEMA_VERSION,
     id: input.id,
@@ -277,7 +294,8 @@ export function createDraftEditPlan(input: CreateDraftEditPlanInput): EditPlan {
       state: 'pending',
       voiceId: input.voiceId,
       estimatedDurationMs,
-      segments: []
+      segments: [],
+      chunks: narrationChunks
     },
     scenes,
     captions: [],

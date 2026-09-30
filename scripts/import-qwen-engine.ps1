@@ -58,6 +58,6 @@ $manifest = [ordered]@{
   validation = @("--self-test", "--caps")
   files = $files
 }
-$manifestJson = $manifest | ConvertTo-Json -Depth 6
+$manifestJson = ($manifest | ConvertTo-Json -Depth 6).Replace("`r`n", "`n")
 [IO.File]::WriteAllText((Join-Path $ResourceDir "manifest.json"), "$manifestJson`n", [Text.UTF8Encoding]::new($false))
 Write-Host "Qwen Windows engine and dependency closure imported into $ResourceDir" -ForegroundColor Green

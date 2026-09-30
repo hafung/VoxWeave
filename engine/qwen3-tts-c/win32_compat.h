@@ -10,6 +10,13 @@
 #include <errno.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <sys/stat.h>
+
+/* The Windows CRT's plain stat/fstat use a 32-bit file size even in a
+ * 64-bit executable. Model weights can exceed 2 GiB; use the 64-bit
+ * structure and functions together for every mapped container. */
+#define stat _stat64
+#define fstat _fstat64
 
 #ifndef MAP_FAILED
 #define MAP_FAILED ((void *)-1)

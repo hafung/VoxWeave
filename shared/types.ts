@@ -28,6 +28,9 @@ export interface SynthesisRequest {
   seed?: number;
   threads: number;
   precision: 'bf16' | 'int8' | 'int4';
+  automaticProsody?: boolean;
+  instruct?: string;
+  rate?: number;
 }
 
 export interface EngineStatus {

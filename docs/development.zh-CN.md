@@ -103,13 +103,25 @@ createDraftPlan
 
 ### 5.1 旁白生成
 
-按自然句或较短语义段生成 WAV，同时保存每段在最终拼接音频中的起止时间。精确停顿仍由当前 markup 解析器处理。
+默认使用 Qwen3-TTS 1.7B CustomVoice + INT8。普通文案通过 `shared/prosody.ts` 按段落组织为至多 160 字符的朗读片段，同段短句尽量合并以保留上下文。程序传入自然朗读指令，让模型根据文意处理情绪、重音、语速和句内停顿；段落间目标停顿为 420 ms，长度限制导致的片段边界为 220 ms。模型已有的前后静音计入目标间隔，不裁切原始语音。用户无需输入标签。
+
+朗读片段与视觉分镜解耦：每个片段保留所属分镜 ID、最终音频偏移和实际语音区间。音频全部完成后，由 SenseVoice 对齐，再解析分镜。对齐失败仅回退对应片段，估算字幕只覆盖语音区间。
+
+克隆使用 1.7B Base 提取 2048 维 `.qvoice`，由 1.7B CustomVoice 加载并接受朗读指令。这是项目原生 C 引擎的跨模型音色功能，官方 CustomVoice API 本身仅提供预设音色。应用仅支持这两个 1.7B 模型；首次切换到本资源版本会清空原音色库、旁白缓存和旧模型路径设置，后续启动保留新建音色。过时或维度不符的音色文件直接拒绝，不降级。
+
+在 Windows Node 环境运行 `pnpm smoke:prosody`，生成 1.7B 无指令对照和自动朗读样片，以及 CPU 耗时、音频时长、字幕和分镜报告。每次使用独立缓存目录，避免缓存命中污染耗时。主推理仍为每个朗读片段一个进程，合并短句减少重复加载；尚未增加 Windows 常驻服务。
+
+`pnpm smoke:clone` 验证 1.7B Base 提取、CustomVoice 自动朗读和字幕对齐。默认生成男声参考音频，也可用 `--reference-audio` 指定素材；报告中的同编码器余弦相似度仅作该样片的音色诊断，不代表所有输入的克隆质量。
+
+2026-09-30 实测（i5-14600K、Windows 原生 CPU、4 线程、INT8、seed 42）：1.7B 无指令耗时 40.9 秒、音频 17.36 秒；自动朗读耗时 41.7 秒、音频 17.96 秒。耗时包含模型加载，仅代表该样片。自动朗读样片的全部 22 个字幕词块对齐成功；桌面生成、预览和 MP4 导出也通过实测。SenseVoice 的读音频与 VAD 接口显式关闭外部缓冲区，以兼容 Electron 的内存限制。
+
+同日 1.7B 克隆实测：以生成的 Uncle Fu 男声作为参考，Base 提取 2048 维音色耗时 6.3 秒，CustomVoice 自动朗读耗时 33.2 秒、成品音频 13.05 秒，40/40 字符通过声学对齐。同编码器声纹余弦相似度为 0.990，仅是这份合成参考的诊断值。独立桌面流程生成 13.77 秒旁白，22/22 字幕词块对齐，4 个分镜与 2 个朗读片段完成预览和 1080×1920 H.264/AAC 导出；首次启动清除旧音色与旁白缓存的断言通过。
 
 缓存键至少包含：
 
 ```text
 normalizedText + voiceId/voiceHash + language + temperature +
-topK + topP + seed + precision + engineVersion + modelVersion
+topK + topP + seed + precision + engineVersion + modelPath/revision + instruct + prosodyVersion
 ```
 
 ### 5.2 SenseVoice 适配器
@@ -299,7 +311,7 @@ M2 已完成：SenseVoiceSmall INT8、Silero VAD 和 FFmpeg/ffprobe 已下载到
 
 验证边界必须继续区分：原生 Qwen 引擎使用 LLVM-MinGW 20260908 / LLVM 23.1.1、OpenBLAS 0.3.34、LZ4 1.10.0 构建为 UCRT x64/AVX2+FMA 目标，`--self-test`、`--caps` 和 UTF-8 `你好。` 实际合成均已在 Windows 通过；该 1.36 秒、24 kHz 单声道 WAV 随后由 SenseVoice/Silero 对齐并进入 Player。Qwen CustomVoice revision `85e237c12c027371202489a0ec509ded67b5e4b5` 是默认预设音色模型，Base 模型用于克隆，两者仍是目录内的外部文件，不进入 Git 或单个 EXE。开发态和打包后 EXE 的完整 TTS → SenseVoice → Player 样片都已通过；Producer 最终 MP4 渲染仍未走通，也未进入默认路径。
 
-离线交付采用“目录 Portable ZIP”，不是把模型塞进单个 EXE：应用、`resources/models`、`resources/engine`、`resources/ffmpeg` 并列保存。严格资源校验通过，共 54 个文件、5,571,818,489 字节；引擎 manifest 同时锁定源码 commit/diff/tree hash、导入 DLL 和各许可证。当前本地发行物为 `release/VoxWeave-Portable-0.2.1-x64/`（约 5.8 GiB）及同名 ZIP（约 4.4 GiB），顶层入口固定为跨区域兼容的 `VoxWeave.exe`，ZIP SHA-256 为 `70f018f3a20774486f16b818ba46bbd735ad98888ad49b9cdc3a0750828f2f14`。打包后 EXE 已在本宿主机不经 Node.js 完成 1.36 秒中文样片和可见画面断言；真正客户干净机仍需人工验收。Producer 所需的 Chrome for Testing 属于 M0/M3 最终渲染闭包，不与 Electron 自带 Chromium 的预览启动混为一谈。
+离线交付采用目录 Portable ZIP：应用、`resources/models`、`resources/engine`、`resources/ffmpeg` 并列保存。2026-09-30 升级后的严格资源校验通过，共 402 个文件、10,650,578,917 字节；TTS 资源仅包含 1.7B Base 与 CustomVoice，引擎 manifest 同时锁定源码 commit/diff/tree hash、导入 DLL 和各许可证。包含旧 TTS 的 0.2.1 / 0.2.2 Portable 目录、ZIP 与校验文件已删除；本轮尚未重新打包发行物。顶层入口固定为 `VoxWeave.exe`。Producer 所需的 Chrome for Testing 属于 M0/M3 最终渲染闭包，与 Electron 自带 Chromium 的预览启动分别校验。
 
 每次实现应同时更新里程碑勾选项和关键兼容性记录，避免文档成为一次性设计稿。
 

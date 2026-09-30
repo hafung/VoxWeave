@@ -6,6 +6,7 @@ export class QwenNarrationSynthesizer implements NarrationSynthesizer {
   constructor(private readonly engine: QwenEngine, private readonly voicePaths: ReadonlyMap<string, string> = new Map()) {}
 
   async synthesize(input: SegmentSynthesisInput): Promise<void> {
+    if (input.signal?.aborted) throw new DOMException('旁白生成已取消', 'AbortError');
     const onAbort = () => this.engine.cancel();
     input.signal?.addEventListener('abort', onAbort, { once: true });
     try {
@@ -21,7 +22,9 @@ export class QwenNarrationSynthesizer implements NarrationSynthesizer {
         topP: input.topP,
         seed: input.seed,
         threads: 4,
-        precision: input.precision
+        precision: input.precision,
+        automaticProsody: false,
+        instruct: input.instruct
       };
       await this.engine.synthesize(request, () => undefined);
     } finally {

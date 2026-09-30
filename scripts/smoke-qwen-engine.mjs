@@ -15,7 +15,7 @@ function stringOption(name, fallback) {
 
 const projectRoot = path.resolve(import.meta.dirname, '..');
 const enginePath = option('--engine', path.join(projectRoot, 'resources', 'engine', 'qwen_tts.exe'));
-const modelDir = option('--model', path.join(projectRoot, 'resources', 'models', 'qwen3-tts-0.6b-customvoice'));
+const modelDir = option('--model', path.join(projectRoot, 'resources', 'models', 'qwen3-tts-1.7b-customvoice'));
 const outputPath = option('--output', path.join(projectRoot, '.windows-smoke', 'qwen-engine-adapter.wav'));
 const adapterModule = option('--adapter', path.join(projectRoot, 'dist-electron', 'electron', 'engine.js'));
 const text = stringOption('--text', '你好。');

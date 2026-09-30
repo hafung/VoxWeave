@@ -10,9 +10,10 @@ describe('known-text alignment', () => {
       { text: '成片呀', startMs: 800, endMs: 1200 }
     ], 100, 1200);
     expect(result.map(token => token.text).join('')).toBe('声织自动成片');
-    expect(result.every(token => token.source === 'aligned')).toBe(true);
+    expect(result.filter(token => token.source === 'estimated').map(token => token.text)).toEqual(['织']);
     expect(result[0].startMs).toBe(100);
-    expect(result.at(-1)?.endMs).toBe(1200);
+    // The recognized extra “呀” occupies the end of the audio; it is not part of the subtitle.
+    expect(result.at(-1)?.endMs).toBe(1067);
   });
 
   it('aggregates aligned characters back into jieba words and bounded cues', () => {
@@ -22,5 +23,14 @@ describe('known-text alignment', () => {
     ], 0, 1800);
     expect(cues.flatMap(cue => cue.tokens).map(token => token.text).join('')).toBe('电商产品需要清晰表达');
     expect(cues.at(-1)?.endMs).toBe(1800);
+  });
+
+  it('preserves acoustic silence instead of stretching the previous word across it', () => {
+    const tokens = [{ text: '你好', startMs: 100, endMs: 400 }, { text: '世界', startMs: 900, endMs: 1200 }];
+    const aligned = alignTextTokens('你好，世界。', tokens, 0, 1400);
+    expect(aligned[1].endMs).toBe(400);
+    expect(aligned[2].startMs).toBe(900);
+    const cues = alignedCaptionCues('pause', '你好，世界。', tokens, 0, 1400);
+    expect(cues.map(cue => [cue.text, cue.startMs, cue.endMs])).toEqual([['你好', 100, 400], ['世界', 900, 1200]]);
   });
 });

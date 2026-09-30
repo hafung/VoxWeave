@@ -33,7 +33,7 @@ try {
   $screenshot = Join-Path $projectDir "composition-smoke.png"
   $env:VOXWEAVE_RESOURCE_ROOT = $resourceRoot
   $env:VOXWEAVE_ENGINE = Join-Path $resourceRoot "engine\qwen_tts.exe"
-  $env:VOXWEAVE_MODEL = Join-Path $resourceRoot "models\qwen3-tts-0.6b-customvoice"
+  $env:VOXWEAVE_MODEL = Join-Path $resourceRoot "models\qwen3-tts-1.7b-customvoice"
   $env:VOXWEAVE_FFMPEG = Join-Path $resourceRoot "ffmpeg\ffmpeg.exe"
   $env:VOXWEAVE_FFPROBE = Join-Path $resourceRoot "ffmpeg\ffprobe.exe"
   $env:VOXWEAVE_COMPOSITION_SMOKE_RESULT = $marker
@@ -48,6 +48,9 @@ try {
   Remove-Item -LiteralPath $marker -Force
   if (-not $result.ok -or -not $result.playerReadyObserved -or -not $result.playerReadyAfterPlayback -or $result.status -ne "resolved" -or $result.playerDurationSeconds -le 0 -or $result.playerScenes -le 0 -or $result.previewNonDarkPixelRatio -le 0.001) {
     throw "Unexpected composition smoke result: $($result | ConvertTo-Json -Compress)"
+  }
+  if ($result.captionTokens -le 0 -or $result.alignedTokens / $result.captionTokens -lt 0.8) {
+    throw "Desktop subtitles were not acoustically aligned: $($result.alignedTokens)/$($result.captionTokens) tokens."
   }
   Write-Host "Windows composition smoke passed: '$($result.captionText)', $($result.durationMs) ms, Player $($result.playerDurationSeconds) s." -ForegroundColor Green
   Write-Host "Screenshot: $screenshot"

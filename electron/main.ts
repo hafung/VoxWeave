@@ -2,8 +2,8 @@ import { app, BrowserWindow, dialog, ipcMain, net, protocol, shell, safeStorage,
 import Store from 'electron-store';
 import path from 'node:path';
 import { existsSync } from 'node:fs';
-import { mkdir, writeFile, rm } from 'node:fs/promises';
-import { randomUUID } from 'node:crypto';
+import { mkdir, readFile, writeFile, rm } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { z } from 'zod';
 import { QwenEngine, type EngineConfig } from './engine.js';
@@ -21,8 +21,9 @@ import { NoReplacementAssetError, applySceneChoice, replaceSceneAsset } from './
 import { listSceneCandidates } from './library/scene-candidates.js';
 import { LocalLlamaEmbedder, SemanticReranker } from './library/semantic.js';
 import { selectBroll } from './library/selector.js';
-import { alignedCaptionCues } from './alignment/align-text.js';
-import { alignWithSenseVoiceProcess } from './alignment/sensevoice-process.js';
+import { alignNarration, senseVoiceNarrationTranscriber } from './alignment/narration.js';
+import { CLONE_TTS_MODEL, DEFAULT_TTS_MODEL, TTS_SETUP_VERSION, describeTtsModel, narrationModelPath, resetTtsDevelopmentData } from './tts-model.js';
+import { AUTOMATIC_NARRATION_INSTRUCTION } from '../shared/prosody.js';
 import { DraftPlanRequestSchema, EditPlanSchema, type EditPlan } from '../shared/edit-plan.js';
 import { ImportAssetRequestSchema, UpdateTagsSchema, SearchAssetsRequestSchema, type ImportReport } from '../shared/library.js';
 import { searchAssets } from './library/search.js';
@@ -40,6 +41,7 @@ if (process.env.VOXWEAVE_COMPOSITION_SMOKE_RESULT && process.env.VOXWEAVE_TEST_U
 interface Settings extends EngineConfig {
   lastProjectId?: string; pexelsKeyEncrypted?: string; voiceProfiles?: VoiceProfile[];
   semanticEnginePath?: string; semanticModelPath?: string; semanticEnabled?: boolean;
+  ttsSetupVersion?: string;
 }
 const settings = new Store<Settings>({ name: 'settings', defaults: {} });
 const audioJobs = new Map<string, QwenEngine>();
@@ -83,7 +85,7 @@ function configuredPaths() {
   const bundledFfprobe = path.join(root, 'ffmpeg', 'ffprobe.exe');
   return {
     enginePath: process.env.VOXWEAVE_ENGINE ?? settings.get('enginePath') ?? path.join(root, 'engine', 'qwen_tts.exe'),
-    modelDir: process.env.VOXWEAVE_MODEL ?? settings.get('modelDir') ?? path.join(root, 'models', 'qwen3-tts-0.6b-customvoice'),
+    modelDir: narrationModelPath(root, settings.get('modelDir'), process.env.VOXWEAVE_MODEL),
     ffmpegPath: existsSync(bundledFfmpeg) ? bundledFfmpeg : process.env.VOXWEAVE_FFMPEG,
     ffprobePath: existsSync(bundledFfprobe) ? bundledFfprobe : process.env.VOXWEAVE_FFPROBE
   };
@@ -97,9 +99,9 @@ function semanticPaths(): { enginePath?: string; modelPath?: string } {
   return existsSync(enginePath) && existsSync(modelPath) ? { enginePath, modelPath } : {};
 }
 
-function configuredEngine(): QwenEngine {
+function configuredEngine(overrideModelDir?: string): QwenEngine {
   const { enginePath, modelDir, ffmpegPath } = configuredPaths();
-  return new QwenEngine({ enginePath, modelDir, ffmpegPath });
+  return new QwenEngine({ enginePath, modelDir: overrideModelDir ?? modelDir, ffmpegPath });
 }
 
 function rendererTools() {
@@ -115,8 +117,16 @@ function sendComposition(sender: WebContents, event: CompositionProgressEvent): 
 }
 
 async function runCompositionSmoke(window: BrowserWindow, resultPath: string): Promise<void> {
+  let voiceId = 'vivian';
+  let clonedVoice: VoiceProfile | undefined;
+  if (process.env.VOXWEAVE_COMPOSITION_SMOKE_CLONE_REFERENCE) {
+    clonedVoice = await window.webContents.executeJavaScript(`window.voxweave.cloneVoice(${JSON.stringify({
+      name: '1.7B clone smoke', referenceAudioPath: process.env.VOXWEAVE_COMPOSITION_SMOKE_CLONE_REFERENCE
+    })})`, true) as VoiceProfile;
+    voiceId = clonedVoice.id;
+  }
   const request = JSON.stringify({
-    script: '你好。', voiceId: 'vivian', aspectRatio: '9:16', captionStyle: 'commerce-bold',
+    script: process.env.VOXWEAVE_COMPOSITION_SMOKE_SCRIPT ?? '你好。', voiceId, aspectRatio: '9:16', captionStyle: 'commerce-bold',
     language: 'Chinese', precision: 'int8'
   });
   const result = await window.webContents.executeJavaScript(`new Promise((resolve, reject) => {
@@ -153,6 +163,8 @@ async function runCompositionSmoke(window: BrowserWindow, resultPath: string): P
                 revision: event.plan?.revision,
                 status: event.plan?.status,
                 captionText: event.plan?.captions?.map(cue => cue.text).join(''),
+                captionTokens: event.plan?.captions?.flatMap(cue => cue.tokens).length ?? 0,
+                alignedTokens: event.plan?.captions?.flatMap(cue => cue.tokens).filter(token => token.source === 'aligned').length ?? 0,
                 previewUrl: event.preview?.entryUrl,
                 durationMs: event.preview?.durationMs,
                 playerReadyObserved: true,
@@ -237,7 +249,7 @@ async function runCompositionSmoke(window: BrowserWindow, resultPath: string): P
   await writeFile(resultPath, `${JSON.stringify({
     ok: true, platform: process.platform, arch: process.arch,
     electron: process.versions.electron, chrome: process.versions.chrome,
-    screenshotPath, previewFrames, previewNonDarkPixelRatio, libraryManagerVerified, exportResult, ...result
+    screenshotPath, previewFrames, previewNonDarkPixelRatio, libraryManagerVerified, exportResult, clonedVoice, ...result
   }, null, 2)}\n`, 'utf8');
 }
 
@@ -306,32 +318,21 @@ function createWindow(): void {
   else void window.loadFile(path.join(__dirname, '..', '..', 'dist', 'index.html'));
 }
 
-async function tryAlign(plan: EditPlan): Promise<EditPlan> {
-  const root = path.join(resourceRoot(), 'models', 'sensevoice-small');
-  const captions = [];
-  for (const segment of plan.narration.segments) {
-    if (!segment.audioPath) continue;
-    const { tokens: relativeTokens, speechEndMs } = await alignWithSenseVoiceProcess(root, segment.audioPath);
-    const tokens = relativeTokens.map(token => ({
-      ...token, startMs: token.startMs + segment.startMs,
-      endMs: token.endMs === undefined ? undefined : token.endMs + segment.startMs
-    }));
-    const acousticEndMs = speechEndMs === undefined ? segment.endMs : Math.min(segment.endMs, segment.startMs + speechEndMs);
-    captions.push(...alignedCaptionCues(segment.id, segment.text, tokens, segment.startMs, acousticEndMs));
-  }
-  if (!captions.length) return plan;
-  return EditPlanSchema.parse({ ...plan, revision: plan.revision + 1, updatedAt: new Date().toISOString(), captions });
-}
-
 const cliMode = process.argv.includes('--cli');
 if (cliMode) {
   process.argv.splice(process.argv.indexOf('--cli'), 1);
   process.env.VOXWEAVE_ENGINE ??= path.join(process.resourcesPath, 'engine', 'qwen_tts.exe');
-  process.env.VOXWEAVE_MODEL ??= path.join(process.resourcesPath, 'models', 'qwen3-tts-0.6b-customvoice');
+  process.env.VOXWEAVE_MODEL ??= path.join(process.resourcesPath, 'models', DEFAULT_TTS_MODEL);
   process.env.VOXWEAVE_FFMPEG ??= path.join(process.resourcesPath, 'ffmpeg', 'ffmpeg.exe');
   process.env.VOXWEAVE_FFPROBE ??= path.join(process.resourcesPath, 'ffmpeg', 'ffprobe.exe');
   void import('../cli/voxweave.js');
-} else app.whenReady().then(() => {
+} else app.whenReady().then(async () => {
+  if (await resetTtsDevelopmentData(app.getPath('userData'), settings.get('ttsSetupVersion'))) {
+    settings.set('voiceProfiles', []);
+    settings.delete('modelDir');
+    settings.delete('lastProjectId');
+    settings.set('ttsSetupVersion', TTS_SETUP_VERSION);
+  }
   const projectsRoot = path.join(app.getPath('userData'), 'projects');
   const editPlans = new EditPlanStore(projectsRoot);
   const library = new LibraryDatabase(path.join(app.getPath('userData'), 'library', 'assets.sqlite'));
@@ -390,7 +391,7 @@ if (cliMode) {
     const profile: VoiceProfile = { id, name: input.name, kind: 'clone',
       path: path.join(app.getPath('userData'), 'voices', `${id}.qvoice`), createdAt: new Date().toISOString() };
     await configuredEngine().createVoiceProfile(input.referenceAudioPath,
-      path.join(resourceRoot(), 'models', 'qwen3-tts-0.6b-base'), profile.path!);
+      path.join(resourceRoot(), 'models', CLONE_TTS_MODEL), profile.path!);
     settings.set('voiceProfiles', [...(settings.get('voiceProfiles') ?? []), profile]);
     return profile;
   });
@@ -450,7 +451,8 @@ if (cliMode) {
     const plan = planDraft(draftRequest);
     const jobId = randomUUID();
     const controller = new AbortController();
-    const engine = configuredEngine();
+    const modelDir = configuredPaths().modelDir;
+    const engine = configuredEngine(modelDir);
     compositionJobs.set(jobId, { controller, engine });
     settings.set('lastProjectId', plan.id);
     const projectDir = path.join(projectsRoot, plan.id);
@@ -459,28 +461,27 @@ if (cliMode) {
     void (async () => {
       await editPlans.save(plan);
       emit('drafting', 0.04, '工程草稿已保存');
-      const paths = configuredPaths();
+      const model = await describeTtsModel(modelDir);
+      const voiceFingerprint = voiceProfile?.path ? createHash('sha256').update(await readFile(voiceProfile.path)).digest('hex') : 'preset';
       const narration = await new NarrationService({
         cacheDir: path.join(app.getPath('userData'), 'cache', 'narration'),
         synthesizer: new QwenNarrationSynthesizer(engine, voiceProfile?.path ? new Map([[voiceProfile.id, voiceProfile.path]]) : undefined), probe: mediaProbe,
         voice: {
           language: request.language ?? 'Chinese', temperature: request.temperature ?? 0.5,
           topK: 50, topP: 1, precision: request.precision ?? 'int8',
-          engineVersion: 'qwen3-tts-c-v0.2.1', modelVersion: path.basename(paths.modelDir ?? 'unknown-model')
+          engineVersion: 'qwen3-tts-c-v0.2.1', modelVersion: `${model.identity}:${voiceFingerprint}`,
+          instruct: model.instructionControl ? AUTOMATIC_NARRATION_INSTRUCTION : undefined
         }
       }).generate(plan, path.join(projectDir, 'artifacts'), controller.signal, progress =>
         emit('narrating', 0.05 + progress.progress * 0.55, progress.message));
-      emit('resolving', 0.63, '正在按真实旁白时长解析分镜…');
+      emit('aligning', 0.63, '正在按最终旁白对齐字幕和分镜…');
+      const alignedNarration = await alignNarration(narration, plan.scenes,
+        senseVoiceNarrationTranscriber(path.join(resourceRoot(), 'models', 'sensevoice-small')), controller.signal,
+        message => emit('aligning', 0.69, `该段字幕使用语音区间估时：${message}`));
+      emit('resolving', 0.74, '正在按真实旁白时长解析分镜…');
       const sourceMetadata = plan.input.sourceVideoPath ? await mediaProbe.probe(plan.input.sourceVideoPath) : undefined;
-      let resolved = resolveEditPlan(plan, { narration, sourceMetadata });
+      let resolved = resolveEditPlan(plan, { narration: alignedNarration, sourceMetadata });
       await editPlans.save(resolved);
-      emit('aligning', 0.7, '正在检查 SenseVoice 精确对齐资源…');
-      try {
-        const aligned = await tryAlign(resolved);
-        if (aligned !== resolved) { resolved = aligned; await editPlans.save(resolved); }
-      } catch (error) {
-        emit('aligning', 0.74, `精确对齐暂不可用，使用 TTS 估时：${error instanceof Error ? error.message : String(error)}`);
-      }
       emit('selecting', 0.78, '正在从本地素材库选择画面…');
       const selected = selectBroll(resolved, library);
       if (selected !== resolved) { resolved = selected; await editPlans.save(resolved); }

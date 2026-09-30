@@ -1,14 +1,19 @@
 [CmdletBinding()]
 param(
-  [ValidateSet('base-0.6b','custom-0.6b')][string]$Variant = 'base-0.6b',
+  [ValidateSet('base-1.7b','custom-1.7b')][string]$Variant = 'custom-1.7b',
   [string]$Destination,
   [string]$Revision
 )
 $ErrorActionPreference = 'Stop'
-$defaultFolder = if ($Variant -eq 'base-0.6b') { 'qwen3-tts-0.6b-base' } else { 'qwen3-tts-0.6b-customvoice' }
+$models = @{
+  'base-1.7b' = @{ Folder = 'qwen3-tts-1.7b-base'; Repo = 'Qwen/Qwen3-TTS-12Hz-1.7B-Base'; Revision = 'fd4b254389122332181a7c3db7f27e918eec64e3'; Hash = '38fc7fc51c5e776e840414b6fd443962e9411b9654888fd7913e4da643cb857c' }
+  'custom-1.7b' = @{ Folder = 'qwen3-tts-1.7b-customvoice'; Repo = 'Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice'; Revision = '0c0e3051f131929182e2c023b9537f8b1c68adfe'; Hash = '38b1d5971bdbd982b561cccec982669a53b0537c3cf5e9bd4778ed07bb2f5137' }
+}
+$model = $models[$Variant]
+$defaultFolder = $model.Folder
 $Destination = if ($Destination) { $Destination } else { Join-Path $PSScriptRoot "..\resources\models\$defaultFolder" }
-$repo = if ($Variant -eq 'base-0.6b') { 'Qwen/Qwen3-TTS-12Hz-0.6B-Base' } else { 'Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice' }
-$Revision = if ($Revision) { $Revision } elseif ($Variant -eq 'base-0.6b') { '5d83992436eae1d760afd27aff78a71d676296fc' } else { '85e237c12c027371202489a0ec509ded67b5e4b5' }
+$repo = $model.Repo
+$Revision = if ($Revision) { $Revision } else { $model.Revision }
 $destinationPath = [IO.Path]::GetFullPath($Destination)
 $files = @('config.json','generation_config.json','tokenizer_config.json','preprocessor_config.json','model.safetensors','vocab.json','merges.txt')
 $codecFiles = @('config.json','configuration.json','model.safetensors','preprocessor_config.json')
@@ -16,7 +21,7 @@ New-Item -ItemType Directory -Force -Path $destinationPath, (Join-Path $destinat
 $manifestPath = Join-Path $destinationPath 'manifest.json'
 $previousManifest = if (Test-Path -LiteralPath $manifestPath) { Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json } else { $null }
 $knownLargeHashes = @{
-  'model.safetensors' = if ($Variant -eq 'base-0.6b') { '180b3b10eb1c9f1b4db7806d5475bae3071c0243c299d49926bab1da3b6946f6' } else { 'bc3c7e785eb961179c25450d1acff03f839e0002f2f3a5aeb67b5735c0fa2adb' }
+  'model.safetensors' = $model.Hash
   'speech_tokenizer/model.safetensors' = '836b7b357f5ea43e889936a3709af68dfe3751881acefe4ecf0dbd30ba571258'
 }
 
@@ -39,6 +44,10 @@ function Get-HfFile([string]$Relative, [string]$Target) {
   }
   $url = "https://huggingface.co/$repo/resolve/$Revision/$Relative"
   $partial = "$Target.part"
+  if ((Test-Path -LiteralPath $partial) -and $expected -and (Get-FileHash -LiteralPath $partial -Algorithm SHA256).Hash.ToLowerInvariant() -eq $expected) {
+    Move-Item -LiteralPath $partial -Destination $Target -Force
+    Write-Host "[complete] $Relative"; return
+  }
   Write-Host "[download] $Relative"
   & curl.exe --fail --location --retry 5 --retry-all-errors --continue-at - --output $partial $url
   if ($LASTEXITCODE -ne 0) { throw "Download failed: $Relative" }

@@ -8,7 +8,7 @@ import { AUDIO_FORMATS, LANGUAGES, type AudioFormat, type Language, type Synthes
 const program = new Command();
 program.name('voxweave').description('声织 VoxWeave — Qwen3-TTS 本地语音合成 CLI').version('0.2.2');
 program
-  .requiredOption('-t, --text <text>', '待合成文本，支持 [pause:500ms] 与 <break time="1s"/>')
+  .requiredOption('-t, --text <text>', '普通文案，自动处理朗读节奏与段落停顿')
   .requiredOption('-o, --output <wav>', '输出 WAV 路径')
   .option('--engine <path>', 'qwen_tts.exe 或 WSL 内 qwen_tts 路径', process.env.VOXWEAVE_ENGINE)
   .option('-m, --model <dir>', '模型目录', process.env.VOXWEAVE_MODEL)
@@ -23,6 +23,7 @@ program
   .option('--seed <number>', '随机种子')
   .option('-j, --threads <number>', '线程数', String(Math.min(4, os.cpus().length)))
   .option('--precision <mode>', 'bf16 | int8 | int4', 'int8')
+  .option('--no-automatic-prosody', '关闭自动朗读处理，用于对照试听')
   .option('-f, --format <format>', 'wav | flac | mp3 | opus | m4a（默认根据扩展名判断）')
   .option('--ffmpeg <path>', 'ffmpeg.exe 路径', process.env.VOXWEAVE_FFMPEG)
   .action(async options => {
@@ -30,13 +31,16 @@ program
     if (!options.engine || !options.model) program.error('必须通过 --engine/--model 或 VOXWEAVE_ENGINE/VOXWEAVE_MODEL 配置引擎与模型');
     if (!LANGUAGES.includes(options.language as Language)) program.error(`不支持的语言：${options.language}`);
     if (!['bf16', 'int8', 'int4'].includes(options.precision)) program.error('precision 必须是 bf16、int8 或 int4');
+    const voicePath = options.voice && path.resolve(options.voice);
+    const modelDir = path.resolve(options.model);
     const request: SynthesisRequest = {
-      text: options.text, outputPath: path.resolve(options.output), outputFormat: options.format, modelDir: path.resolve(options.model), language: options.language,
-      speaker: options.speaker, voicePath: options.voice && path.resolve(options.voice), referenceAudio: options.refAudio && path.resolve(options.refAudio),
+      text: options.text, outputPath: path.resolve(options.output), outputFormat: options.format, modelDir, language: options.language,
+      speaker: options.speaker, voicePath, referenceAudio: options.refAudio && path.resolve(options.refAudio),
       referenceText: options.refText, temperature: Number(options.temperature), topK: Number(options.topK), topP: Number(options.topP),
-      seed: options.seed === undefined ? undefined : Number(options.seed), threads: Number(options.threads), precision: options.precision
+      seed: options.seed === undefined ? undefined : Number(options.seed), threads: Number(options.threads), precision: options.precision,
+      automaticProsody: options.automaticProsody
     };
-    const engine = new QwenEngine({ enginePath: options.engine, modelDir: options.model, ffmpegPath: options.ffmpeg });
+    const engine = new QwenEngine({ enginePath: options.engine, modelDir, ffmpegPath: options.ffmpeg });
     await engine.synthesize(request, event => {
       if (event.progress !== undefined) process.stderr.write(`\r${Math.round(event.progress * 100)}% ${event.message.padEnd(36)}`);
       else process.stderr.write(`\n${event.message}`);

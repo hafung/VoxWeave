@@ -3,6 +3,7 @@ import { EditPlanSchema } from '../../shared/edit-plan.js';
 import type { MediaMetadata } from '../media/probe.js';
 import type { NarrationArtifact } from './narration.js';
 import { estimateCaptionCues } from './captions.js';
+import { spokenCharacterCount } from '../../shared/prosody.js';
 
 export interface ResolvePlanOptions {
   narration: NarrationArtifact;
@@ -13,8 +14,27 @@ export interface ResolvePlanOptions {
 function resolvedScenes(plan: EditPlan, narration: NarrationArtifact, sourceMetadata?: MediaMetadata): Scene[] {
   let sourceCursor = 0;
   const scenes: Scene[] = [];
-  for (const [index, segment] of narration.segments.entries()) {
-    const draft = plan.scenes[index] ?? plan.scenes.at(-1)!;
+  const byId = new Map(plan.scenes.map(scene => [scene.id, scene]));
+  const actualTimings = new Map(narration.sceneTimings?.map(scene => [scene.id, scene]));
+  const sceneSegments = narration.segments.flatMap((segment, index) => {
+    const ids = segment.sceneIds ?? [byId.has(segment.id) ? segment.id : plan.scenes[index]?.id ?? plan.scenes.at(-1)!.id];
+    const weights = ids.map(id => Math.max(1, spokenCharacterCount(byId.get(id)?.script ?? segment.text)));
+    const total = weights.reduce((sum, weight) => sum + weight, 0);
+    const speechStart = segment.speechStartMs ?? segment.startMs;
+    const speechEnd = segment.speechEndMs ?? segment.endMs;
+    const boundaries = [index === 0 ? 0 : segment.startMs];
+    let accumulated = 0;
+    for (let cursor = 0; cursor < ids.length - 1; cursor++) {
+      accumulated += weights[cursor];
+      const boundary = actualTimings.get(ids[cursor])?.endMs ?? Math.round(speechStart + (speechEnd - speechStart) * accumulated / total);
+      boundaries.push(Math.max(boundaries[cursor] + 1, Math.min(segment.endMs - (ids.length - cursor - 1), boundary)));
+    }
+    boundaries.push(segment.endMs);
+    return ids.map((id, cursor) => ({ id, startMs: boundaries[cursor], endMs: boundaries[cursor + 1] }));
+  });
+  for (const segment of sceneSegments) {
+    const draft = byId.get(segment.id)!;
+    if (!draft) throw new Error(`旁白引用不存在的分镜 ${segment.id}`);
     const duration = segment.endMs - segment.startMs;
     const sourceAvailable = plan.input.sourceVideoPath && sourceMetadata
       ? Math.max(0, (sourceMetadata.durationMs ?? 0) - sourceCursor)
@@ -79,7 +99,7 @@ export function resolveEditPlan(plan: EditPlan, options: ResolvePlanOptions): Ed
       segments: options.narration.segments
     },
     scenes: resolvedScenes(plan, options.narration, options.sourceMetadata),
-    captions: estimateCaptionCues(options.narration.segments)
+    captions: options.narration.captions ?? estimateCaptionCues(options.narration.segments)
   };
   return EditPlanSchema.parse(resolved);
 }

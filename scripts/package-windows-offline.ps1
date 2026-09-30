@@ -71,8 +71,11 @@ try {
   if ($LASTEXITCODE -ne 0) { throw "electron-builder failed ($LASTEXITCODE)." }
 
   $unpackedDir = Join-Path $buildDir "win-unpacked"
-  if (-not (Test-Path (Join-Path $unpackedDir "resources\models\qwen3-tts-0.6b-customvoice\model.safetensors"))) {
+  if (-not (Test-Path (Join-Path $unpackedDir "resources\models\qwen3-tts-1.7b-customvoice\model.safetensors"))) {
     throw "Packaged directory does not contain the external default Qwen CustomVoice model resource."
+  }
+  if (-not (Test-Path (Join-Path $unpackedDir "resources\models\qwen3-tts-1.7b-base\model.safetensors"))) {
+    throw "Packaged directory does not contain the 1.7B Base voice-cloning model resource."
   }
   Move-Item $unpackedDir $portableDir
   $applicationExe = Get-ChildItem -LiteralPath $portableDir -Filter "*.exe" -File | Select-Object -First 1

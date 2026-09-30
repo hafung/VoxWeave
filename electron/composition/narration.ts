@@ -1,8 +1,9 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { access, copyFile, mkdir, rm } from 'node:fs/promises';
 import path from 'node:path';
-import type { EditPlan } from '../../shared/edit-plan.js';
-import { composeWav } from '../../shared/wav.js';
+import type { CaptionCue, EditPlan } from '../../shared/edit-plan.js';
+import { composeSpeechWav } from '../../shared/wav.js';
+import { PROSODY_VERSION } from '../../shared/prosody.js';
 import type { MediaProbe } from '../media/probe.js';
 
 export interface NarrationVoiceOptions {
@@ -14,6 +15,7 @@ export interface NarrationVoiceOptions {
   precision: 'bf16' | 'int8' | 'int4';
   engineVersion: string;
   modelVersion: string;
+  instruct?: string;
 }
 
 export interface NarrationProgress {
@@ -37,6 +39,8 @@ export interface NarrationArtifact {
   audioPath: string;
   durationMs: number;
   segments: EditPlan['narration']['segments'];
+  captions?: CaptionCue[];
+  sceneTimings?: Array<{ id: string; startMs: number; endMs: number }>;
 }
 
 export interface NarrationServiceOptions {
@@ -56,7 +60,7 @@ async function exists(file: string): Promise<boolean> {
 
 export function narrationCacheKey(text: string, voiceId: string, options: NarrationVoiceOptions): string {
   const normalizedText = text.normalize('NFKC').replace(/\s+/gu, ' ').trim();
-  return createHash('sha256').update(JSON.stringify({ normalizedText, voiceId, ...options })).digest('hex');
+  return createHash('sha256').update(JSON.stringify({ normalizedText, voiceId, ...options, prosodyVersion: PROSODY_VERSION })).digest('hex');
 }
 
 export class NarrationService {
@@ -75,17 +79,20 @@ export class NarrationService {
     await mkdir(narrationDir, { recursive: true });
     onProgress({ phase: 'preparing', progress: 0.02, message: '正在准备分段旁白…' });
 
-    const generated: Array<{ id: string; text: string; file: string; durationMs: number }> = [];
-    for (const [index, scene] of plan.scenes.entries()) {
+    const chunks = plan.narration.chunks ?? plan.scenes.map(scene => ({
+      id: scene.id, text: scene.script, sceneIds: [scene.id], pauseBeforeMs: 0, pauseAfterMs: 0
+    }));
+    const generated: Array<{ id: string; text: string; file: string; sceneIds: string[]; pauseBeforeMs: number; pauseAfterMs: number }> = [];
+    for (const [index, chunk] of chunks.entries()) {
       if (signal?.aborted) throw abortError();
-      const key = narrationCacheKey(scene.script, plan.narration.voiceId, this.options.voice);
+      const key = narrationCacheKey(chunk.text, plan.narration.voiceId, this.options.voice);
       const cached = path.join(this.options.cacheDir, `${key}.wav`);
       if (!await exists(cached)) {
-        const pending = path.join(this.options.cacheDir, `.${key}.${process.pid}.wav`);
+        const pending = path.join(this.options.cacheDir, `.${key}.${randomUUID()}.wav`);
         try {
           await this.options.synthesizer.synthesize({
             ...this.options.voice,
-            text: scene.script,
+            text: chunk.text,
             voiceId: plan.narration.voiceId,
             outputPath: pending,
             signal
@@ -97,33 +104,34 @@ export class NarrationService {
           }
         } finally { await rm(pending, { force: true }); }
       }
-      const segmentFile = path.join(narrationDir, `${scene.id}.wav`);
+      const segmentFile = path.join(narrationDir, `${chunk.id}.wav`);
       await copyFile(cached, segmentFile);
       const metadata = await this.options.probe.probe(segmentFile);
-      if (!metadata.durationMs) throw new Error(`旁白分段 ${scene.id} 缺少有效时长`);
-      generated.push({ id: scene.id, text: scene.script, file: segmentFile, durationMs: metadata.durationMs });
+      if (!metadata.durationMs) throw new Error(`旁白分段 ${chunk.id} 缺少有效时长`);
+      generated.push({ ...chunk, file: segmentFile });
       onProgress({
         phase: 'generating',
-        progress: 0.05 + 0.8 * (index + 1) / plan.scenes.length,
-        message: `已完成第 ${index + 1}/${plan.scenes.length} 段旁白`
+        progress: 0.05 + 0.8 * (index + 1) / chunks.length,
+        message: `已完成第 ${index + 1}/${chunks.length} 段旁白`
       });
     }
 
     if (signal?.aborted) throw abortError();
     const audioPath = path.join(narrationDir, 'narration.wav');
     onProgress({ phase: 'composing', progress: 0.9, message: '正在拼接旁白…' });
-    await composeWav(generated.map(segment => ({ path: segment.file })), audioPath);
+    const timings = await composeSpeechWav(generated.map(segment => ({
+      path: segment.file, pauseBeforeMs: segment.pauseBeforeMs, pauseAfterMs: segment.pauseAfterMs
+    })), audioPath);
     if (signal?.aborted) throw abortError();
     onProgress({ phase: 'probing', progress: 0.96, message: '正在读取真实音频时长…' });
     const total = await this.options.probe.probe(audioPath);
     if (!total.durationMs) throw new Error('拼接旁白缺少有效时长');
 
-    let cursor = 0;
     const segments = generated.map((segment, index) => {
-      const endMs = index === generated.length - 1 ? total.durationMs! : cursor + segment.durationMs;
-      const result = { id: segment.id, text: segment.text, startMs: cursor, endMs, audioPath: segment.file };
-      cursor = endMs;
-      return result;
+      const timing = timings[index];
+      return { id: segment.id, text: segment.text, sceneIds: segment.sceneIds,
+        startMs: timing.startMs, endMs: index === generated.length - 1 ? total.durationMs! : timing.endMs,
+        speechStartMs: timing.speechStartMs, speechEndMs: timing.speechEndMs, audioPath: segment.file };
     });
     return { audioPath, durationMs: total.durationMs, segments };
   }

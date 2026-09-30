@@ -39,10 +39,24 @@ describe('NarrationService', () => {
     const first = await service.generate(plan, path.join(root, 'project'));
     const second = await service.generate(plan, path.join(root, 'project-two'));
 
-    expect(first.durationMs).toBe(2400);
-    expect(first.segments.map(segment => [segment.startMs, segment.endMs])).toEqual([[0, 1200], [1200, 2400]]);
-    expect(second.durationMs).toBe(2400);
-    expect(synthesize).toHaveBeenCalledTimes(2);
+    expect(first.durationMs).toBe(1200);
+    expect(first.segments.map(segment => [segment.startMs, segment.endMs])).toEqual([[0, 1200]]);
+    expect(first.segments[0].sceneIds).toEqual(['scene-001', 'scene-002']);
+    expect(second.durationMs).toBe(1200);
+    expect(synthesize).toHaveBeenCalledTimes(1);
+    expect(synthesize.mock.calls[0][0].text).toBe('第一段。第二段。');
+  });
+
+  it('includes automatic paragraph silence in the timeline and excludes it from speech bounds', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'voxweave-paragraphs-')); temporary.push(root);
+    const service = new NarrationService({ cacheDir: path.join(root, 'cache'), probe: new WavMediaProbe(), voice,
+      synthesizer: { synthesize: async input => { await writeFile(input.outputPath, wav(1200)); } } });
+    const plan = createDraftEditPlan({ id: 'paragraphs', script: '第一段。\n第二段。', voiceId: 'vivian' });
+    const result = await service.generate(plan, path.join(root, 'project'));
+    expect(result.durationMs).toBe(2820);
+    expect(result.segments.map(segment => [segment.startMs, segment.speechEndMs, segment.endMs])).toEqual([
+      [0, 1200, 1620], [1620, 2820, 2820]
+    ]);
   });
 
   it('uses every output-affecting voice option in its stable key', () => {
@@ -51,6 +65,7 @@ describe('NarrationService', () => {
     const changed = narrationCacheKey('你好 世界', 'vivian', { ...voice, modelVersion: 'next' });
     expect(first).toBe(normalized);
     expect(changed).not.toBe(first);
+    expect(narrationCacheKey('你好 世界', 'vivian', { ...voice, instruct: 'Speak naturally.' })).not.toBe(first);
   });
 
   it('stops before spawning synthesis when already cancelled', async () => {

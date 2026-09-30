@@ -52,10 +52,10 @@ export async function verifySenseVoiceResources(root: string): Promise<SenseVoic
 
 interface SherpaResult { tokens: string[]; timestamps: number[]; durations: number[]; ys_log_probs?: number[] }
 interface SherpaModule {
-  readWave(file: string): { samples: Float32Array; sampleRate: number };
+  readWave(file: string, enableExternalBuffer?: boolean): { samples: Float32Array; sampleRate: number };
   Vad: new (config: unknown, bufferSizeInSeconds: number) => {
     acceptWaveform(samples: Float32Array): void; isEmpty(): boolean;
-    front(): { start: number; samples: Float32Array }; pop(): void; flush(): void;
+    front(enableExternalBuffer?: boolean): { start: number; samples: Float32Array }; pop(): void; flush(): void;
   };
   OfflineRecognizer: { createAsync(config: unknown): Promise<{
     createStream(): { acceptWaveform(wave: { samples: Float32Array; sampleRate: number }): void };
@@ -78,7 +78,9 @@ export class SenseVoiceAdapter {
     });
     if (signal?.aborted) throw new DOMException('字幕对齐已取消', 'AbortError');
     const stream = recognizer.createStream();
-    stream.acceptWaveform(sherpa.readWave(audioPath));
+    // Electron's V8 memory cage rejects external native ArrayBuffers. Ask
+    // sherpa to copy audio into a runtime-owned buffer in both worker modes.
+    stream.acceptWaveform(sherpa.readWave(audioPath, false));
     const result = await recognizer.decodeAsync(stream);
     return (result.tokens ?? []).map((text, index) => {
       const startSeconds = result.timestamps?.[index] ?? 0;
@@ -95,7 +97,7 @@ export class SenseVoiceAdapter {
 
   async speechEndMs(audioPath: string): Promise<number | undefined> {
     const sherpa = require('sherpa-onnx-node') as SherpaModule;
-    const wave = sherpa.readWave(audioPath);
+    const wave = sherpa.readWave(audioPath, false);
     const sampleRate = 16_000;
     const samples = wave.sampleRate === sampleRate ? wave.samples : resampleLinear(wave.samples, wave.sampleRate, sampleRate);
     const vad = new sherpa.Vad({
@@ -109,7 +111,7 @@ export class SenseVoiceAdapter {
     vad.flush();
     let endSample: number | undefined;
     while (!vad.isEmpty()) {
-      const segment = vad.front();
+      const segment = vad.front(false);
       endSample = Math.max(endSample ?? 0, segment.start + segment.samples.length);
       vad.pop();
     }

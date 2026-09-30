@@ -11,7 +11,7 @@
   <a href="#命令行">命令行</a>
 </p>
 
-声织 VoxWeave 是为视频博主、播客、知识区作者、教育工作者和开发者打造的本地语音工作台。它把专注好用的桌面创作界面、可自动化的 CLI 与 Qwen3-TTS 0.6B 原生 C 推理引擎组合在一起。
+声织 VoxWeave 是为视频博主、播客、知识区作者、教育工作者和开发者打造的本地语音工作台。它把专注好用的桌面创作界面、可自动化的 CLI 与 Qwen3-TTS 1.7B CustomVoice 原生 CPU 推理引擎组合在一起。
 
 未发布的选题、口播文案、参考音色和生成结果都留在你的电脑里。Windows 完整离线发行包的目标是不需要 Python、WSL、单独下载模型或 NVIDIA 显卡；当前源码版仍在完成 Windows 原生引擎与真实样片验证。
 
@@ -22,17 +22,17 @@
 - **敏感文案不出本机。** 未发布脚本和真人音色无需交给第三方云服务，降低内容泄露与素材滥用风险。
 - **普通电脑也能做 AI 配音。** 支持 CPU 推理与 INT8/INT4 模式，没有独立显卡也能建立自己的本地语音工作流。
 - **下载后直接创作。** 完整离线发行包会带齐模型、原生引擎依赖和 FFmpeg，不用在客户机器上处理 Python、CUDA 或模型下载。
-- **不是“生成完再凑合剪”。** 用 `[pause:500ms]` 写入精确停顿，复用克隆音色，并可调温度、Top-k、Top-p、随机种子和线程数。
+- **普通文案直接配音。** 系统自动合并同段短句，由 TTS 根据文意调整语气和节奏，并补齐段落停顿；用户无需填写朗读标签。
 - **真正进入生产流程。** GUI 可快速试听与导出，CLI 可做批量旁白；支持 WAV、FLAC、MP3、Ogg/Opus、M4A/AAC。
 - **长任务也不拖死界面。** 推理运行在隔离的原生子进程中，模型加载、任务取消与异常不会把编辑器一起卡住。
 
 ## 目前已经能做什么
 
 - 文本转语音，覆盖 Qwen3-TTS 支持的 10 种语言，包括中文、英文和日文
-- 使用 Qwen3-TTS 0.6B Base，通过参考音频与可选原文即时克隆音色
+- 使用 1.7B Base 从参考音频提取音色，再通过原生引擎由 1.7B CustomVoice 加载并接受朗读指令
 - 保存并复用 `.qvoice` 音色文件
-- 支持 `[pause:500ms]` / `<break time="1s"/>`，在 PCM 层插入精确静音
-- 实验性 `[laugh]`、`[sigh]` 表演标签
+- 默认 1.7B CustomVoice 自动朗读；段间停顿计入模型已有静音，避免重复叠加
+- 在最终音频生成后对齐字幕和分镜；对齐失败时仅对该段估时，并排除段间静音
 - BF16 / INT8 / INT4、温度、Top-k、Top-p、随机种子与线程数控制
 - 常见参考音频自动标准化为 24 kHz 单声道 PCM
 - GUI 与 CLI 共用文本解析、推理参数、音频拼接和转码逻辑
@@ -54,7 +54,7 @@ Windows 完整版自带 CLI，不需要 Node.js：
 
 ```powershell
 & 'C:\Users\你\AppData\Local\Programs\voxweave\声织 VoxWeave.exe' --cli `
-  -t '你好，[pause:500ms] 欢迎使用声织。' -o .\hello.mp3 -f mp3 -l Chinese
+  -t '你好，欢迎使用声织。输入普通文案，就能开始配音。' -o .\hello.mp3 -f mp3 -l Chinese
 
 & 'C:\Users\你\AppData\Local\Programs\voxweave\声织 VoxWeave.exe' --cli --help
 ```
@@ -81,8 +81,8 @@ pnpm build
 在可联网的 Windows 构建机上先一次性准备外部资源，再生成目录便携包：
 
 ```powershell
-.\scripts\download-model.ps1 -Variant custom-0.6b
-.\scripts\download-model.ps1 -Variant base-0.6b
+.\scripts\download-model.ps1 -Variant custom-1.7b
+.\scripts\download-model.ps1 -Variant base-1.7b
 .\scripts\setup-sensevoice.ps1
 .\scripts\setup-ffmpeg.ps1
 .\scripts\setup-render-browser.ps1
@@ -117,7 +117,7 @@ pnpm smoke:package:win -PackageDir .\release-test\VoxWeave-Portable-0.2.2-x64 -W
 
 ```powershell
 $env:VOXWEAVE_ENGINE='C:\path\to\qwen_tts.exe'
-$env:VOXWEAVE_MODEL='D:\models\qwen3-tts-0.6b-base'
+$env:VOXWEAVE_MODEL='D:\models\qwen3-tts-1.7b-customvoice'
 $env:VOXWEAVE_FFMPEG='C:\path\to\ffmpeg.exe'
 pnpm cli --text '你好，欢迎使用声织。' --output .\hello.wav --language Chinese
 ```

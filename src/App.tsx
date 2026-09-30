@@ -30,7 +30,7 @@ const voiceLanguages: Record<string, GenerateCompositionRequest['language']> = {
 };
 const stages: Array<{ phase: CompositionProgressEvent['phase']; label: string }> = [
   { phase: 'drafting', label: '分镜' }, { phase: 'narrating', label: '旁白' },
-  { phase: 'resolving', label: '时间轴' }, { phase: 'aligning', label: '字幕' },
+  { phase: 'aligning', label: '字幕' }, { phase: 'resolving', label: '时间轴' },
   { phase: 'selecting', label: '素材' }, { phase: 'compiling', label: '预览' }
 ];
 
@@ -478,7 +478,7 @@ export function App() {
     </Modal>}
 
     {settingsOpen && <Modal title="本地引擎设置" subtitle="旁白和可选语义检索都在本机运行" close={() => setSettingsOpen(false)}>
-      <div className="settings-form"><PathField label="引擎路径" value={enginePath} placeholder="qwen_tts.exe 或 WSL 可执行文件" choose={async () => { const selected = await api()?.chooseFile('engine'); if (selected) setEnginePath(selected); }}/><PathField label="0.6B 模型目录" value={modelDir} placeholder="qwen3-tts-0.6b-base" choose={async () => { const selected = await api()?.chooseFile('model'); if (selected) setModelDir(selected); }}/>
+      <div className="settings-form"><PathField label="引擎路径" value={enginePath} placeholder="qwen_tts.exe 或 WSL 可执行文件" choose={async () => { const selected = await api()?.chooseFile('engine'); if (selected) setEnginePath(selected); }}/><PathField label="旁白模型目录" value={modelDir} placeholder="qwen3-tts-1.7b-customvoice" choose={async () => { const selected = await api()?.chooseFile('model'); if (selected) setModelDir(selected); }}/>
         <div className={`engine-summary ${status.state}`}><i/><span><b>{status.message}</b><small>文本与媒体只在本机处理。</small></span></div><button className="modal-primary" onClick={configure}>保存并检测旁白引擎</button>
         <div className="semantic-settings"><b>本地语义检索（可选）</b><small>使用 llama.cpp 的 CPU 运行器和 Qwen3 Embedding GGUF；只比较素材已有文字信息，不识别视频画面。</small></div>
         <PathField label="llama-server 路径" value={semanticEnginePath} placeholder="选择 llama-server.exe" choose={async () => { const selected = await api()?.chooseFile('semantic-engine'); if (selected) setSemanticEnginePath(selected); }}/>

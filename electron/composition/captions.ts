@@ -49,14 +49,16 @@ function weightedBoundaries(weights: number[], startMs: number, endMs: number): 
 }
 
 export function estimateCaptionCues(
-  segments: Array<{ id: string; text: string; startMs: number; endMs: number }>
+  segments: Array<{ id: string; text: string; startMs: number; endMs: number; speechStartMs?: number; speechEndMs?: number }>
 ): CaptionCue[] {
   const cues: CaptionCue[] = [];
   for (const segment of segments) {
     const words = segmentChinese(segment.text).filter(token => !punctuation.test(token));
     if (!words.length) continue;
-    if (segment.endMs - segment.startMs < words.length) throw new Error(`旁白分段 ${segment.id} 过短，无法分配字幕 token`);
-    const wordBoundaries = weightedBoundaries(words.map(tokenWeight), segment.startMs, segment.endMs);
+    const startMs = segment.speechStartMs ?? segment.startMs;
+    const endMs = segment.speechEndMs ?? segment.endMs;
+    if (endMs - startMs < words.length) throw new Error(`旁白分段 ${segment.id} 过短，无法分配字幕 token`);
+    const wordBoundaries = weightedBoundaries(words.map(tokenWeight), startMs, endMs);
     const timed = words.map((text, index) => ({
       text,
       startMs: wordBoundaries[index],

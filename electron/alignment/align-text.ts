@@ -76,34 +76,29 @@ export function alignTextTokens(
     index, startMs: recognized[matched].startMs, endMs: recognized[matched].endMs,
     confidence: recognized[matched].confidence
   }));
-  const boundaries = new Array<number>(reference.length + 1);
-  boundaries[0] = startMs;
-  boundaries[reference.length] = endMs;
-  for (const anchor of anchors) {
-    if (!anchor) continue;
-    boundaries[anchor.index] = Math.max(startMs, Math.min(endMs - 1, anchor.startMs));
-    boundaries[anchor.index + 1] = Math.max(boundaries[anchor.index] + 1, Math.min(endMs, anchor.endMs));
+  const intervals = anchors.map(anchor => anchor && ({ startMs: anchor.startMs, endMs: anchor.endMs }));
+  for (let index = 0; index < intervals.length;) {
+    if (intervals[index]) { index++; continue; }
+    let next = index + 1;
+    while (next < intervals.length && !intervals[next]) next++;
+    const from = intervals[index - 1]?.endMs ?? startMs;
+    const to = intervals[next]?.startMs ?? endMs;
+    for (let cursor = index; cursor < next; cursor++) intervals[cursor] = {
+      startMs: Math.round(from + (to - from) * (cursor - index) / (next - index)),
+      endMs: Math.round(from + (to - from) * (cursor - index + 1) / (next - index))
+    };
+    index = next;
   }
-  let knownIndex = 0;
-  while (knownIndex < boundaries.length - 1) {
-    if (boundaries[knownIndex] === undefined) { knownIndex++; continue; }
-    let next = knownIndex + 1;
-    while (next < boundaries.length && boundaries[next] === undefined) next++;
-    const from = boundaries[knownIndex];
-    const to = boundaries[next];
-    for (let offset = 1; offset < next - knownIndex; offset++) {
-      boundaries[knownIndex + offset] = Math.round(from + (to - from) * offset / (next - knownIndex));
-    }
-    knownIndex = next;
-  }
-  for (let index = 1; index < boundaries.length; index++) {
-    boundaries[index] = Math.max(boundaries[index - 1] + 1, boundaries[index]);
-  }
-  boundaries[boundaries.length - 1] = endMs;
-  return reference.map((text, index) => ({
-    text, startMs: boundaries[index], endMs: boundaries[index + 1],
-    confidence: anchors[index]?.confidence, source: 'aligned' as const
-  }));
+  let previousEnd = startMs;
+  return reference.map((text, index) => {
+    const interval = intervals[index]!;
+    const latestEnd = endMs - (reference.length - index - 1);
+    const start = Math.max(previousEnd, Math.min(latestEnd - 1, interval.startMs));
+    const end = Math.max(start + 1, Math.min(latestEnd, interval.endMs));
+    previousEnd = end;
+    return { text, startMs: start, endMs: end,
+      confidence: anchors[index]?.confidence, source: anchors[index] ? 'aligned' as const : 'estimated' as const };
+  });
 }
 
 export function alignedCaptionCues(
@@ -119,11 +114,22 @@ export function alignedCaptionCues(
   const cues: CaptionCue[] = [];
   let characterCursor = 0;
   let cueTokens: AcousticToken[] = [];
+  const flush = () => {
+    if (!cueTokens.length) return;
+    cues.push({
+      id: `${id}-aligned-${String(cues.length + 1).padStart(2, '0')}`,
+      text: cueTokens.map(token => token.text).join(''),
+      startMs: cueTokens[0].startMs, endMs: cueTokens.at(-1)!.endMs,
+      tokens: cueTokens, emphasis: []
+    });
+    cueTokens = [];
+  };
   for (const word of words) {
     const size = characters(word).length;
     const pieces = aligned.slice(characterCursor, characterCursor + size);
     characterCursor += size;
     if (!pieces.length) continue;
+    if (cueTokens.length && pieces[0].startMs - cueTokens.at(-1)!.endMs >= 180) flush();
     cueTokens.push({
       text: word,
       startMs: pieces[0].startMs,
@@ -131,30 +137,13 @@ export function alignedCaptionCues(
       confidence: pieces.every(piece => piece.confidence !== undefined)
         ? pieces.reduce((sum, piece) => sum + piece.confidence!, 0) / pieces.length
         : undefined,
-      source: 'aligned'
+      source: pieces.every(piece => piece.source === 'aligned') ? 'aligned' : 'estimated'
     });
     const count = cueTokens.reduce((sum, token) => sum + characters(token.text).length, 0);
     if (count >= 4) {
-      cues.push({
-        id: `${id}-aligned-${String(cues.length + 1).padStart(2, '0')}`,
-        text: cueTokens.map(token => token.text).join(''),
-        startMs: cueTokens[0].startMs,
-        endMs: cueTokens.at(-1)!.endMs,
-        tokens: cueTokens,
-        emphasis: []
-      });
-      cueTokens = [];
+      flush();
     }
   }
-  if (cueTokens.length) {
-    cues.push({
-      id: `${id}-aligned-${String(cues.length + 1).padStart(2, '0')}`,
-      text: cueTokens.map(token => token.text).join(''),
-      startMs: cueTokens[0].startMs,
-      endMs: cueTokens.at(-1)!.endMs,
-      tokens: cueTokens,
-      emphasis: []
-    });
-  }
+  flush();
   return cues;
 }
